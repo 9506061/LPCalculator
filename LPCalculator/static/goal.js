@@ -3,26 +3,43 @@
 
 const GP_WANT = { ge: "≥ 目標(不希望不足 → min d⁻)", le: "≤ 目標(不希望超過 → min d⁺)", eq: "= 目標(min d⁻ + d⁺)" };
 const GP_EX = {
-  "Beaver Creek 陶器(4 個目標)": {
+  "Beaver Creek 陶器公司": {
     vars: [["x1", "碗"], ["x2", "杯子"]],
     goals: [["勞力工時至少40小時", [1, 2], null, "ge", 40, 1, 1], ["每日至少獲利$1600", [40, 50], null, "ge", 1600, 2, 1],
       ["陶土不超過120磅", [4, 3], null, "le", 120, 3, 1], ["加班時間愈少愈好", [0, 0], [0, "+"], "le", 0, 4, 1]], hard: [] },
-  "Beaver Creek(加班≤10小時、第五目標加權 4:5)": {
+  "Beaver Creek 陶器公司(加入加班上限與產量目標)": {
     vars: [["x1", "碗"], ["x2", "杯子"]],
     goals: [["勞力工時至少40小時", [1, 2], null, "ge", 40, 1, 1], ["每日至少獲利$1600", [40, 50], null, "ge", 1600, 2, 1],
       ["陶土不超過120磅", [4, 3], null, "le", 120, 3, 1], ["加班不超過10小時", [0, 0], [0, "+"], "le", 10, 4, 1],
       ["碗接近30個", [1, 0], null, "ge", 30, 5, 4], ["杯子接近20個", [0, 1], null, "ge", 20, 5, 5]],
     hard: [["倉庫:碗最多30個", [1, 0], "<=", 30], ["倉庫:杯子最多20個", [0, 1], "<=", 20]] },
-  "Rucklehouse 民意調查": {
+  "Rucklehouse 民意調查公司": {
     vars: [["x1", "電話訪員人數", "int"], ["x2", "親自訪員人數", "int"]],
     goals: [["至少訪問3000人", [80, 40], null, "ge", 3000, 1, 1], ["每天預算最多$2500", [50, 70], null, "le", 2500, 2, 1],
       ["至少1000人來自電話訪問", [80, 0], null, "ge", 1000, 3, 1]], hard: [] },
-  "診所人力配置": {
+  "社區診所人力配置": {
     vars: [["x1", "一般醫生GP時數"], ["x2", "護士時數"], ["x3", "內科醫生時數"]],
     goals: [["護士至少30小時", [0, 1, 0], null, "ge", 30, 1, 1], ["每週預算$1200不超過", [40, 20, 150], null, "le", 1200, 2, 1],
       ["GP+內科至少20小時", [1, 0, 1], null, "ge", 20, 3, 1], ["內科至少6小時", [0, 0, 1], null, "ge", 6, 4, 1]], hard: [] },
 };
-const GP = { vars: [], goals: [], hard: [], result: null, error: null };
+const GP_STORY = {
+  "Beaver Creek 陶器公司": [
+    "Beaver Creek 陶器公司生產碗(x1)與杯子(x2)。每個碗需勞力 1 小時、陶土 4 磅,獲利 $40;每個杯子需勞力 2 小時、陶土 3 磅,獲利 $50。",
+    "每天正常勞力 40 小時、陶土 120 磅。管理者依重要性訂出目標:",
+    "P1 勞力工時至少用滿 40 小時(避免員工閒置);P2 每日獲利至少 $1,600;P3 陶土使用不超過 120 磅;P4 加班時間愈少愈好。"],
+  "Beaver Creek 陶器公司(加入加班上限與產量目標)": [
+    "延續 Beaver Creek 陶器公司:碗每個需勞力 1 小時、陶土 4 磅,獲利 $40;杯子每個需勞力 2 小時、陶土 3 磅,獲利 $50。",
+    "倉庫最多只能放 30 個碗、20 個杯子。目標依序為:P1 勞力至少 40 小時;P2 每日獲利至少 $1,600;P3 陶土不超過 120 磅;P4 加班不超過 10 小時;",
+    "P5 盡量生產 30 個碗與 20 個杯子,兩者的權重依獲利比例設為 4 : 5。"],
+  "Rucklehouse 民意調查公司": [
+    "Rucklehouse 公司要進行民意調查,可以雇用電話訪員(x1)與親自訪問的訪員(x2),人數必須是整數。",
+    "電話訪員每人每天可訪問 80 人、成本 $50;親自訪員每人每天可訪問 40 人、成本 $70。",
+    "目標依序為:P1 每天至少訪問 3,000 人;P2 每天預算不超過 $2,500;P3 至少 1,000 人來自電話訪問。"],
+  "社區診所人力配置": [
+    "社區診所要安排一般醫生(GP)、護士、內科醫生每週的工作時數,時薪分別為 $40、$20、$150。",
+    "目標依序為:P1 護士每週至少 30 小時;P2 每週人事預算不超過 $1,200;P3 GP 與內科醫生合計至少 20 小時;P4 內科醫生至少 6 小時。"],
+};
+const GP = { vars: [], goals: [], hard: [], result: null, error: null, title: "", story: null };
 
 function gpLoad(key) {
   const e = GP_EX[key];
@@ -31,6 +48,7 @@ function gpLoad(key) {
     ({ name, a: [...a], dev: dev ? [{ goal: dev[0], side: dev[1], coef: 1 }] : [], want, target, priority, weight }));
   GP.hard = e.hard.map(([name, a, op, b]) => ({ name, a: [...a], op, b }));
   GP.result = null; GP.error = null;
+  GP.title = key; GP.story = GP_STORY[key] || null;
 }
 const dn = (k, side) => `d${k + 1}${side === "-" ? "⁻" : "⁺"}`;
 const undesired = g => ({ ge: ["-"], le: ["+"], eq: ["-", "+"] }[g.want]);
@@ -85,7 +103,7 @@ window.renderGoal = function renderGoal() {
     h("li", {}, "依優先順序 P1 > P2 > … 逐層求解(Preemptive);同一優先層可用權重加權。"),
     h("li", {}, "「離差項」可讓目標建立在另一個目標的離差變數上(例如加班 d1⁺ ≤ 10),即「目標中的目標」。"))));
 
-  const sel = h("select", { "aria-label": "載入範例" }, h("option", { value: "" }, "— 載入範例 —"), Object.keys(GP_EX).map(k => h("option", { value: k }, k)));
+  const sel = h("select", { "aria-label": "載入範例" }, h("option", { value: "" }, "— 選擇題目 —"), Object.keys(GP_EX).map(k => h("option", { value: k, selected: k === GP.title }, k)));
   sel.addEventListener("change", () => { if (sel.value) { gpLoad(sel.value); renderGoal(); } });
   const nIn = h("input", { type: "number", min: 1, max: 20, value: GP.vars.length, class: "num", "aria-label": "決策變數個數" });
   nIn.addEventListener("change", () => { gpResize(Number(nIn.value) || 1); re(); });
@@ -95,8 +113,9 @@ window.renderGoal = function renderGoal() {
     kindRows(GP.vars, () => { upd(); const b = nonnegAllButton(GP.vars, renderGoal); allBtn.replaceWith(b); allBtn = b; })));
   let allBtn = nonnegAllButton(GP.vars, renderGoal);
   left.append(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "1. 決策變數"), allBtn),
-    h("div", { class: "row" }, h("label", { class: "field" }, "範例", sel), h("label", { class: "field" }, "決策變數個數", nIn)),
+    h("div", { class: "row" }, h("label", { class: "field" }, "範例題目", sel), h("label", { class: "field" }, "決策變數個數", nIn)),
     h("div", { class: "scroll-x" }, varTbl)));
+  if (GP.story) left.insertBefore(problemCard(GP.title, GP.story, () => { GP.story = null; renderGoal(); }), left.lastChild);
 
   // 目標
   const gBody = h("tbody", {});

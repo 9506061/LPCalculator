@@ -178,3 +178,6 @@ svg .probe:focus-visible circle.ring { stroke: var(--ink); stroke-width: 2; }
 .probe-out .bad { color: var(--err-ink); background: var(--err-bg); }
 .net-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .net-tools .hint { margin: 0; }
+
+.card.problem { border-left: 3px solid var(--feasible); }
+.card.problem p { margin: 6px 0 0; line-height: 1.75; }

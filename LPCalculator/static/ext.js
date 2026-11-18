@@ -7,25 +7,74 @@ const APS_CITIES = ["Atlanta", "Boston", "Charlotte", "Cincinnati", "Detroit", "
 const APS_COVER = ["1,3,8", "2,9", "1,3,11", "4,5,8,10", "4,5,6,7,10", "4,5,6,7,8,12", "5,6,7", "1,4,6,8,12", "2,9,11",
   "4,5,10,11", "3,9,10,11", "6,8,12"];
 const SEL_EXAMPLES = {
-  "社區休閒設施規劃(課本例題)": () => ({ sense: "max", obj_name: "每日使用人次",
+  "社區休閒設施規劃": () => ({ sense: "max", obj_name: "每日使用人次",
     items: [["游泳池", 300], ["網球中心", 90], ["運動場", 400], ["體育館", 150]].map(([name, value]) => ({ name, value })),
     resources: [{ name: "預算($)", usage: [35000, 10000, 25000, 90000], op: "<=", avail: 120000 },
       { name: "土地(英畝)", usage: [4, 2, 7, 3], op: "<=", avail: 12 }],
     rules: [{ type: "exclusive", items: [0, 1], k: 1, p: 0, q: 1 }] }),
-  "課堂練習:醫療中心/停車場/研究大樓/宿舍": () => ({ sense: "min", obj_name: "興建數量",
+  "大學校園建設計畫": () => ({ sense: "min", obj_name: "興建數量",
     items: ["醫療中心", "停車場", "研究大樓", "宿舍"].map(name => ({ name, value: 1 })), resources: [],
     rules: [{ type: "exclusive", items: [0, 2], k: 1, p: 0, q: 2 }, { type: "if_then", items: [], k: 1, p: 2, q: 1 },
       { type: "coreq", items: [], k: 1, p: 0, q: 3 }, { type: "at_least", items: [0, 1, 2, 3], k: 2, p: 0, q: 1 },
       { type: "at_most", items: [0, 1, 2, 3], k: 3, p: 0, q: 1 }] }),
-  "綜合練習:智慧校園建設": () => ({ sense: "min", obj_name: "建設數量",
+  "智慧校園建設計畫": () => ({ sense: "min", obj_name: "建設數量",
     items: ["智慧教室", "AI運算中心", "雲端資料中心", "智慧停車系統", "校園APP平台"].map(name => ({ name, value: 1 })), resources: [],
     rules: [{ type: "if_then", items: [], k: 1, p: 1, q: 2 }, { type: "coreq", items: [], k: 1, p: 0, q: 4 },
       { type: "at_least", items: [3, 4], k: 1, p: 0, q: 1 }, { type: "at_least", items: [0, 1, 2, 3, 4], k: 3, p: 0, q: 1 },
       { type: "at_most", items: [0, 1, 2, 3, 4], k: 4, p: 0, q: 1 }] }),
 };
+// ---------------------------------------------------------------- 題目敘述
+const SEL_STORY = {
+  "社區休閒設施規劃": ["市政府考慮興建游泳池、網球中心、運動場、體育館四項設施,預算 $120,000,可用土地 12 英畝。",
+    "游泳池:成本 $35,000、土地 4 英畝、每日 300 人次;網球中心:$10,000、2 英畝、90 人次;運動場:$25,000、7 英畝、400 人次;體育館:$90,000、3 英畝、150 人次。",
+    "游泳池與網球中心最多只能蓋其中一個。請問該蓋哪些設施,每日使用人次最多?"],
+  "大學校園建設計畫": ["學校評估興建醫療中心、停車場、研究大樓、宿舍四項建設,需符合下列條件:",
+    "(1) 醫療中心與研究大樓最多只能蓋一個;(2) 若蓋研究大樓,就必須蓋停車場;(3) 醫療中心與宿舍必須同時蓋或同時不蓋;(4) 至少要蓋 2 項、最多蓋 3 項。",
+    "請建立 0-1 邏輯限制式,並找出興建數量最少的可行方案。"],
+  "智慧校園建設計畫": ["學校規劃智慧教室、AI 運算中心、雲端資料中心、智慧停車系統、校園 APP 平台五項建設,需符合下列條件:",
+    "(1) 若建 AI 運算中心,就必須建雲端資料中心;(2) 智慧教室與校園 APP 平台必須同時建或同時不建;(3) 智慧停車系統與校園 APP 平台至少要建一個;(4) 總共至少建 3 項、最多建 4 項。",
+    "請建立 0-1 邏輯限制式,並找出建設數量最少的可行方案。"],
+};
+Object.assign(T_STORY, {
+  transport: { title: "三工廠四地區的運輸規劃", story: [
+    "公司有 S1、S2、S3 三座工廠,每月供應量分別為 300、300、200 單位;四個需求地區 A、B、C、D 的需求量分別為 150、250、200、200 單位。",
+    "各工廠運送 1 單位到各地區的運費如成本矩陣所示。請問該如何安排運送量,才能滿足需求並使總運費最低?"] },
+  assignment: { title: "三位員工的工作指派", story: [
+    "主管要把三份工作分派給甲、乙、丙三位員工,每人恰做一份工作、每份工作恰由一人負責。",
+    "每位員工完成各工作的成本如矩陣所示。請問該如何指派,總成本最低?"] },
+  blending: { title: "飼料配方混合問題", story: [
+    "飼料廠要用玉米(每公斤 $3)與大豆(每公斤 $5)混合出 100 公斤的飼料。",
+    "每公斤玉米含蛋白質 0.09 公斤、纖維 0.02 公斤;每公斤大豆含蛋白質 0.5 公斤、纖維 0.06 公斤。",
+    "整批飼料至少要含 20 公斤蛋白質、纖維最多 5 公斤。請問兩種原料各用多少,成本最低?"] },
+  production: { title: "產品組合問題", story: [
+    "工廠生產產品 A 與產品 B,每單位利潤分別為 $20 與 $15。",
+    "生產 1 單位 A 需人力 2 小時、原料 1 單位;生產 1 單位 B 需人力 1 小時、原料 3 單位。每天可用人力 20 小時、原料 35 單位。",
+    "請問各生產多少,利潤最大?"] },
+  selection: { title: "社區休閒設施規劃", story: SEL_STORY["社區休閒設施規劃"] },
+  facility: { title: "One Potato, Two Potato 農場選址", story: [
+    "洋芋片公司要從 6 座候選農場中決定要和哪些農場簽約,供應馬鈴薯給 Atlanta、Baton Rouge、Chicago 三座加工廠(需求量分別為 12、10、14 百萬磅)。",
+    "每座農場簽約都要支付固定費用,且有各自的供應上限;從各農場運到各工廠的單位成本如成本矩陣所示。",
+    "請問該選哪些農場、各運多少,才能滿足需求並使「固定費用 + 運輸成本」最低?"] },
+  covering: { title: "12 城市服務據點設置", story: [
+    "公司要在 Atlanta、Boston、Charlotte…等 12 座城市中選擇設置服務據點的地點。",
+    "每個據點只能服務在規定時間內可到達的城市(可涵蓋的城市編號列在表中)。",
+    "請問最少要設置幾個據點、設在哪些城市,才能讓 12 座城市全部被涵蓋?"] },
+  transship: { title: "Walsh 公司轉運問題", story: [
+    "Walsh 公司在 Ohio、Pennsylvania、New York 有三座工廠,產能分別為 72、105、83 單位。",
+    "產品先運到 Indiana 或 Georgia 的倉庫轉運,再送到 Virginia、Kentucky、Louisiana 三地,需求量分別為 90、80、120 單位。",
+    "各路線的單位運費如弧線表所示。總供給 260 小於總需求 290(供不應求),請問該如何運送,總運費最低?"] },
+  shortest: { title: "道路網路的最短路徑", story: [
+    "下圖是 7 個地點之間的道路網路,弧線上的數字是兩地之間的距離。",
+    "請問從地點 1 出發到地點 7,應走哪條路線,總距離最短?"] },
+  maxflow: { title: "包裹配送網路的最大流量", story: [
+    "物流公司要把包裹從配送中心(節點 1)經由道路網路送到目的地(節點 7)。",
+    "每條道路每小時能通過的包裹數有上限(容量),部分道路雙向通行但兩個方向的容量不同。",
+    "請問每小時最多能送出多少包裹?各條道路該分配多少流量?"] },
+});
+
 const mkArcs = (list, key) => list.map(([a, b, v]) => ({ from: a - 1, to: b - 1, [key]: v }));
 Object.assign(T, {
-  selection: SEL_EXAMPLES["社區休閒設施規劃(課本例題)"](),
+  selection: SEL_EXAMPLES["社區休閒設施規劃"](),
   facility: {
     facilities: [[405, 11.2], [390, 10.5], [450, 12.8], [368, 9.3], [520, 10.8], [465, 9.6]].map(([fixed, cap], i) => ({ name: `農場${i + 1}`, fixed, cap })),
     customers: [["Atlanta", 12], ["Baton Rouge", 10], ["Chicago", 14]].map(([name, demand]) => ({ name, demand })),
@@ -56,10 +105,10 @@ function nodeSelect(names, get, set, label) {
   el.addEventListener("change", () => set(Number(el.value)));
   return el;
 }
-function exampleSelect(examples, onPick) {
-  const el = h("select", { "aria-label": "載入範例" }, h("option", { value: "" }, "— 載入範例 —"), Object.keys(examples).map(k => h("option", { value: k }, k)));
+function exampleSelect(examples, onPick, current) {
+  const el = h("select", { "aria-label": "載入範例題目" }, h("option", { value: "" }, "— 選擇題目 —"), Object.keys(examples).map(k => h("option", { value: k, selected: k === current }, k)));
   el.addEventListener("change", () => { if (el.value) onPick(el.value); });
-  return h("label", { class: "field" }, "範例", el);
+  return h("label", { class: "field" }, "範例題目", el);
 }
 function dataTable(heads, rows) {
   return h("div", { class: "scroll-x" }, h("table", { class: "data" },
@@ -96,7 +145,7 @@ EXT_INPUTS.selection = (left, d) => {
   const n = d.items.length;
   const sense = (val, text) => h("label", { class: "inline" }, h("input", { type: "radio", name: "selsense", checked: d.sense === val, onchange: () => { d.sense = val; } }), text);
   left.append(h("div", { class: "card" }, h("h2", {}, "Step 2:問題規模"),
-    h("div", { class: "row" }, exampleSelect(SEL_EXAMPLES, k => { T.selection = SEL_EXAMPLES[k](); reT(); })),
+    h("div", { class: "row" }, exampleSelect(SEL_EXAMPLES, k => { T.selection = SEL_EXAMPLES[k](); T_STORY.selection = { title: k, story: SEL_STORY[k] }; reT(); }, T_STORY.selection && T_STORY.selection.title)),
     h("div", { class: "row" },
       sizeInput("方案數量", () => n, m => {
         while (d.items.length < m) d.items.push({ name: `方案${d.items.length + 1}`, value: 0 });

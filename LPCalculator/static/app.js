@@ -476,28 +476,46 @@ function resultCards(res, opts = {}) {
 // 一般線性規劃
 // =====================================================================
 const EXAMPLES = {
-  "作業範例:max Z = 20x1 + 15x2": { sense: "max", obj_name: "利潤", unit: "單位",
+  "產品組合問題": { sense: "max", obj_name: "利潤", unit: "單位",
+    story: ["某工廠生產產品 A 與產品 B,每單位利潤分別為 $20 與 $15。",
+      "生產 1 單位 A 需要人力 2 小時、原料 1 單位;生產 1 單位 B 需要人力 1 小時、原料 3 單位。",
+      "工廠每天可用人力 20 小時、原料 35 單位。請問 A、B 各生產多少單位,才能使每日利潤最大?"],
     vars: [["x1", "cont", "產品A"], ["x2", "cont", "產品B"]], c: [20, 15],
     cons: [["人力限制", [2, 1], "<=", 20], ["原料限制", [1, 3], "<=", 35]] },
-  "最小化範例:min Z = 3x1 + 8x2": { sense: "min", obj_name: "成本", unit: "份",
+  "最低成本飲食搭配": { sense: "min", obj_name: "成本", unit: "份",
+    story: ["營養師要用食物 A(每份 $3)與食物 B(每份 $8)搭配每日餐點。",
+      "為了達到營養需求,每天兩種食物合計至少要吃 4 份;為了均衡,食物 A 的份數最多只能比食物 B 多 2 份。",
+      "請問 A、B 各吃幾份,才能以最低成本滿足需求?"],
     vars: [["x1", "cont", "食物A"], ["x2", "cont", "食物B"]], c: [3, 8],
     cons: [["營養需求", [1, 1], ">=", 4], ["比例限制", [1, -1], "<=", 2]] },
-  "整數規劃範例:max Z = 5x1 + 4x2": { sense: "max", obj_name: "利潤", unit: "台",
+  "機型生產排程(整數台數)": { sense: "max", obj_name: "利潤", unit: "台",
+    story: ["工廠生產機型 A 與機型 B,每台利潤分別為 5 千元與 4 千元,且產量必須是整數台。",
+      "每台 A 需組裝 6 小時、測試 1 小時;每台 B 需組裝 4 小時、測試 2 小時。",
+      "每天組裝工時 24 小時、測試工時 6 小時。請問各生產幾台,利潤最大?"],
     vars: [["x1", "int", "機型A"], ["x2", "int", "機型B"]], c: [5, 4],
     cons: [["組裝工時", [6, 4], "<=", 24], ["測試工時", [1, 2], "<=", 6]] },
-  "W6 混合整數規劃:Nancy 投資問題": { sense: "max", obj_name: "一年後報酬", unit: "",
+  "Nancy 的投資問題": { sense: "max", obj_name: "一年後報酬", unit: "",
+    story: ["Nancy 有 $250,000 可以投資在公寓、土地與債券三種標的:",
+      "公寓每間 $50,000,一年報酬 $9,000,最多可買 4 間;土地每英畝 $12,000,一年報酬 $1,500,最多 15 英畝;債券每張 $8,000,一年報酬 $1,000,最多 20 張。",
+      "公寓與債券只能買整數單位,土地可以分割。請問該如何投資,一年後的報酬最大?(混合整數規劃)"],
     vars: [["x1", "int", "公寓(間)"], ["x2", "cont", "土地(英畝)"], ["x3", "int", "債券(張)"]], c: [9000, 1500, 1000],
     cons: [["投資預算", [50000, 12000, 8000], "<=", 250000], ["公寓上限", [1, 0, 0], "<=", 4],
       ["土地上限", [0, 1, 0], "<=", 15], ["債券上限", [0, 0, 1], "<=", 20]] },
-  "W6 0-1 規劃:社區休閒設施": { sense: "max", obj_name: "每日使用人次", unit: "",
+  "社區休閒設施規劃": { sense: "max", obj_name: "每日使用人次", unit: "",
+    story: ["市政府考慮興建游泳池、網球中心、運動場、體育館四項設施,預算 $120,000,可用土地 12 英畝。",
+      "游泳池:成本 $35,000、土地 4 英畝、每日 300 人次;網球中心:$10,000、2 英畝、90 人次;運動場:$25,000、7 英畝、400 人次;體育館:$90,000、3 英畝、150 人次。",
+      "游泳池與網球中心最多只能蓋其中一個。每項設施只能選擇蓋或不蓋,請問該蓋哪些,每日使用人次最多?(0-1 整數規劃)"],
     vars: [["x1", "bin", "游泳池"], ["x2", "bin", "網球中心"], ["x3", "bin", "運動場"], ["x4", "bin", "體育館"]], c: [300, 90, 400, 150],
     cons: [["預算限制", [35000, 10000, 25000, 90000], "<=", 120000], ["土地限制", [4, 2, 7, 3], "<=", 12], ["互斥限制", [1, 1, 0, 0], "<=", 1]] },
-  "五個變數範例": { sense: "max", obj_name: "利潤", unit: "單位",
+  "五種產品的生產規劃": { sense: "max", obj_name: "利潤", unit: "單位",
+    story: ["工廠生產 5 種產品,每單位利潤分別為 $8、$6、$9、$5、$7。",
+      "每單位所需機器工時為 2、1、3、1、2 小時(每天共 40 小時);人工工時為 1、2、1、2、1 小時(每天共 30 小時);原料為 3、1、2、2、1 單位(每天共 50 單位)。",
+      "請問各產品生產多少,總利潤最大?"],
     vars: [1, 2, 3, 4, 5].map(i => [`x${i}`, "cont", `產品${i}`]), c: [8, 6, 9, 5, 7],
     cons: [["機器工時", [2, 1, 3, 1, 2], "<=", 40], ["人工工時", [1, 2, 1, 2, 1], "<=", 30], ["原料", [3, 1, 2, 2, 1], "<=", 50]] },
 };
 
-const G = { sense: "max", obj_name: "利潤", unit: "單位", vars: [], c: [], cons: [], result: null, error: null, busy: false };
+const G = { sense: "max", obj_name: "利潤", unit: "單位", vars: [], c: [], cons: [], result: null, error: null, busy: false, title: "", story: null };
 
 function loadExample(key) {
   const e = EXAMPLES[key];
@@ -506,6 +524,15 @@ function loadExample(key) {
   G.c = [...e.c];
   G.cons = e.cons.map(([name, a, op, b]) => ({ name, a: [...a], op, b }));
   G.result = null; G.error = null;
+  G.title = key; G.story = e.story || null;
+}
+
+// 題目敘述卡片(載入範例時顯示)
+function problemCard(title, story, onClose) {
+  return h("div", { class: "card problem" },
+    h("div", { class: "card-head" }, h("h2", {}, `題目:${title}`),
+      onClose && h("button", { class: "btn icon", type: "button", title: "隱藏題目", "aria-label": "隱藏題目", onclick: onClose }, "✕")),
+    [].concat(story).map(t => h("p", {}, t)));
 }
 
 function resizeVars(n) {
@@ -530,7 +557,7 @@ function renderGeneral() {
   };
 
   // 範例
-  const sel = h("select", { "aria-label": "載入範例" }, h("option", { value: "" }, "— 載入範例 —"), Object.keys(EXAMPLES).map(k => h("option", { value: k }, k)));
+  const sel = h("select", { "aria-label": "載入範例題目" }, h("option", { value: "" }, "— 選擇題目 —"), Object.keys(EXAMPLES).map(k => h("option", { value: k, selected: k === G.title }, k)));
   sel.addEventListener("change", () => { if (sel.value) { loadExample(sel.value); renderGeneral(); } });
 
   // 1. 問題類型 + 變數個數
@@ -544,7 +571,8 @@ function renderGeneral() {
       h("label", { class: "field" }, "決策變數個數", nIn),
       h("label", { class: "field" }, "目標名稱(用於結果解讀)", textInput(() => G.obj_name, v => { G.obj_name = v; G._objTouched = true; }, "wide", "目標名稱")),
       h("label", { class: "field" }, "數量單位", textInput(() => G.unit, v => G.unit = v, "name", "單位"))),
-    h("div", { class: "row" }, h("label", { class: "field" }, "範例", sel))));
+    h("div", { class: "row" }, h("label", { class: "field" }, "範例題目", sel))));
+  if (G.story) left.append(problemCard(G.title, G.story, () => { G.story = null; renderGeneral(); }));
 
   // 2. 變數
   const varTbl = h("table", { class: "grid-in" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, ""), G.vars.map((_, i) => h("th", {}, `變數 ${i + 1}`))),
@@ -622,6 +650,7 @@ const T_GROUPS = [
   ["W8 網路模式", { transship: "轉運模式(Transshipment)", shortest: "最短路徑問題", maxflow: "最大流量問題" }],
 ];
 const T_NAMES = Object.assign({}, ...T_GROUPS.map(g => g[1]));
+const T_STORY = {};     // 各範本預設資料的題目敘述(由 ext.js 填入)
 const EXT_INPUTS = {};   // 由 ext.js 註冊:kind -> (left, d) => void
 const EXT_EXTRA = {};    // 由 ext.js 註冊:extra.type -> (res, box) => void
 
@@ -659,6 +688,9 @@ function renderTemplate() {
   kinds.addEventListener("change", () => { T.kind = kinds.value; T.result = null; T.error = null; T.preview = null; renderTemplate(); });
   left.append(h("div", { class: "card" }, h("h2", {}, "Step 1:選擇範本"), h("div", { class: "row" }, h("label", { class: "field" }, "範本", kinds)),
     h("div", { class: "steps" }, ["資料輸入", "建立模型", "求解", "結果分析"].map((t, i) => h("span", { class: i === 0 ? "on" : "" }, `${i + 1}. ${t}`)))));
+
+  const st = T_STORY[T.kind];
+  if (st && !st.hidden) left.append(problemCard(st.title, st.story, () => { st.hidden = true; renderTemplate(); }));
 
   const d = T[T.kind];
   if (EXT_INPUTS[T.kind]) {
