@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理數學計算器</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // 在畫面繪製前套用主題,避免閃爍
+  try {
+    var t = localStorage.getItem("theme");
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="inner">
+    <button type="button" class="theme-btn" id="theme-toggle" aria-label="切換深色/淺色主題"></button>
+    <h1>管理數學計算器</h1>
+    <p>管理數學 ‧ 線性規劃、整數規劃、網路模式、目標規劃:建立模型、求解、解讀結果</p>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-general" aria-selected="true">一般線性規劃</button>
+      <button role="tab" id="tab-template" aria-selected="false">管理科學範本</button>
+      <button role="tab" id="tab-goal" aria-selected="false">目標規劃</button>
+    </div>
+  </div>
+</header>
+<main>
+  <section id="view-general"></section>
+  <section id="view-template" hidden></section>
+  <section id="view-goal" hidden></section>
+</main>
+<script src="/static/app.js"></script>
+<script src="/static/ext.js"></script>
+<script src="/static/goal.js"></script>
+</body>
+</html>
