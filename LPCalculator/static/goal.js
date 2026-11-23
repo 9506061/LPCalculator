@@ -178,6 +178,216 @@ window.renderGoal = function renderGoal() {
   window.scrollTo(0, y);
 };
 
+// 一個目標 → 容量條 + 白話結論
+function goalItem(g) {
+  const pct = v => (clamp(v, 0, 1) * 100).toFixed(2) + "%";
+  const neg = g.value < -1e-9 || g.target < -1e-9;
+  const word = { ge: "至少", le: "不超過", eq: "剛好" }[g.want] || "";
+  const diff = Math.abs(g.value - g.target);
+  let track = null, say;
+  if (!neg && Math.max(g.value, g.target) > 1e-12) {
+    const mx = Math.max(g.value, g.target) * 1.08;
+    track = h("div", { class: "cap-track" },
+      h("div", { class: "cap-used" + (g.achieved ? "" : " hot"), style: `width:${pct(g.value / mx)}` }, g.value / mx > 0.18 ? `實際 ${fmt(g.value)}` : ""),
+      h("div", { class: "cap-mark", style: `left:${pct(g.target / mx)}` }, h("span", {}, `目標 ${fmt(g.target)}`)));
+  }
+  if (g.achieved) say = diff < 1e-9 ? `達成:剛好等於目標 ${fmt(g.target)}。` : `達成:實際 ${fmt(g.value)},${g.want === "le" ? `比上限少 ${fmt(diff)}` : `比目標多 ${fmt(diff)}`}。`;
+  else say = g.dminus > 1e-9 ? `未達成:實際 ${fmt(g.value)},還差 ${fmt(g.dminus)} 才到目標。` : `未達成:實際 ${fmt(g.value)},超過目標 ${fmt(g.dplus)}。`;
+  if (!g.achieved) say += " 因為要先滿足優先順序更高的目標,這個目標只能讓步。";
+  const item = h("div", { class: "cap" },
+    h("div", { class: "cap-head" }, h("span", { class: "pri-tag" }, `P${g.priority}`), h("b", {}, g.name),
+      h("span", { class: "pill " + (g.achieved ? "good" : "bind") }, g.achieved ? "達成" : "未達成"),
+      h("span", { class: "cap-val" }, `實際 ${fmt(g.value)} / 目標 ${word} ${fmt(g.target)}`)),
+    track, h("div", { class: "cap-say" }, say));
+  tipOn(item, `${g.name}(P${g.priority}${g.weight !== 1 ? `,權重 ${fmt(g.weight)}` : ""})\n${g.text}\nd⁻ = ${fmt(g.dminus)},d⁺ = ${fmt(g.dplus)}`);
+  return item;
+}
+
+// ---------- 兩個變數時的目標規劃圖(可拖曳目標線、試算點)
+function gpGraphCard(r) {
+  if (GP.vars.length !== 2) return null;
+  const num = v => Number(v) || 0;
+  const names = GP.vars.map(v => v.name || "?");
+  const sol = [r.x[0].value, r.x[1].value];
+  const nn = GP.vars.map(v => isNonneg(v.kind));
+  const hard = GP.hard.map(c => ({ name: c.name, a: [num(c.a[0]), num(c.a[1])], op: c.op, b: num(c.b) }));
+  GP.vars.forEach((v, j) => {
+    const e = j ? [0, 1] : [1, 0];
+    if (nn[j]) hard.push({ name: `${v.name} ≥ 0`, a: e, op: ">=", b: 0, bound: true });
+    if (v.kind === "bin") hard.push({ name: `${v.name} ≤ 1`, a: e, op: "<=", b: 1, bound: true });
+  });
+  // 只畫「只含決策變數」的目標(含其他離差項的目標,例如加班,無法畫成一條線)
+  const goals = GP.goals.map((g, k) => ({ k, name: g.name, p: g.priority, want: g.want, a: [num(g.a[0]), num(g.a[1])], t0: num(g.target), t: num(g.target), res: r.goals[k] }))
+    .filter(o => !(GP.goals[o.k].dev || []).length && (Math.abs(o.a[0]) > 1e-12 || Math.abs(o.a[1]) > 1e-12));
+  if (!goals.length) return null;
+
+  // 視窗:各線與座標軸的交點 + 解
+  const lines = [...hard.filter(c => !c.bound), ...goals.map(o => ({ a: o.a, b: o.t }))];
+  const pts = [sol];
+  lines.forEach(l => { if (Math.abs(l.a[0]) > 1e-12) pts.push([l.b / l.a[0], 0]); if (Math.abs(l.a[1]) > 1e-12) pts.push([0, l.b / l.a[1]]); });
+  const fin = pts.filter(p => isFinite(p[0]) && isFinite(p[1]));
+  const xs = fin.map(p => p[0]), ys = fin.map(p => p[1]);
+  let xl = nn[0] ? 0 : Math.min(0, ...xs), xh = Math.max(...xs, 1), yl = nn[1] ? 0 : Math.min(0, ...ys), yh = Math.max(...ys, 1);
+  const w = { xl: xl - (nn[0] ? 0.04 : 0.1) * (xh - xl), xh: xh + 0.15 * (xh - xl), yl: yl - (nn[1] ? 0.04 : 0.1) * (yh - yl), yh: yh + 0.15 * (yh - yl) };
+
+  const W = 760, H = 520, M = { l: 64, r: 24, t: 20, b: 56 };
+  const sx = x => M.l + ((x - w.xl) / (w.xh - w.xl)) * (W - M.l - M.r);
+  const sy = y => H - M.b - ((y - w.yl) / (w.yh - w.yl)) * (H - M.t - M.b);
+  const ix = px => w.xl + ((px - M.l) / (W - M.l - M.r)) * (w.xh - w.xl);
+  const iy = py => w.yl + ((H - M.b - py) / (H - M.t - M.b)) * (w.yh - w.yl);
+  const svg = s("svg", { class: "plot drag", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "目標規劃圖形(可拖曳目標線與試算點)" });
+  const nice = (lo, hi) => {
+    const raw = (hi - lo) / 7, p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map(m => m * p).find(v => v >= raw), out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(parseFloat(v.toFixed(8)));
+    return out;
+  };
+  nice(w.xl, w.xh).forEach(v => { svg.append(s("line", { x1: sx(v), x2: sx(v), y1: M.t, y2: H - M.b, stroke: "var(--line-soft)" }), s("text", { class: "tick", x: sx(v), y: H - M.b + 16, "text-anchor": "middle" }, fmt(v))); });
+  nice(w.yl, w.yh).forEach(v => { svg.append(s("line", { y1: sy(v), y2: sy(v), x1: M.l, x2: W - M.r, stroke: "var(--line-soft)" }), s("text", { class: "tick", x: M.l - 8, y: sy(v) + 4, "text-anchor": "end" }, fmt(v))); });
+  svg.append(s("line", { x1: M.l, x2: W - M.r, y1: sy(0), y2: sy(0), stroke: "var(--ink-2)" }), s("line", { y1: M.t, y2: H - M.b, x1: sx(0), x2: sx(0), stroke: "var(--ink-2)" }));
+  svg.append(s("text", { x: (M.l + W - M.r) / 2, y: H - 12, "text-anchor": "middle", "font-size": 14 }, `${names[0]}(${GP.vars[0].label})`));
+  svg.append(s("text", { x: 16, y: (M.t + H - M.b) / 2, "text-anchor": "middle", "font-size": 14, transform: `rotate(-90 16 ${(M.t + H - M.b) / 2})` }, `${names[1]}(${GP.vars[1].label})`));
+
+  // 系統限制形成的可行區域(固定)
+  const region = regionIn(hard, w);
+  if (region.length >= 3 && hard.some(c => !c.bound))
+    svg.append(s("polygon", { points: region.map(p => `${sx(p[0])},${sy(p[1])}`).join(" "), fill: "var(--feasible-soft)", stroke: "var(--feasible)", "stroke-width": 1.5, "pointer-events": "none" }));
+  hard.filter(c => !c.bound).forEach(c => {
+    const seg = clipToWindow(c.a[0], c.a[1], c.b, w);
+    if (!seg) return;
+    const pos = { x1: sx(seg[0][0]), y1: sy(seg[0][1]), x2: sx(seg[1][0]), y2: sy(seg[1][1]) };
+    const g_ = s("g", { class: "cline" }, s("line", { class: "vis", ...pos, stroke: "var(--feasible)", "stroke-width": 1.6 }), s("line", { class: "hit", ...pos }));
+    tipOn(g_, `系統限制:${c.name}\n${exprText(c.a, names)} ${OPSYM[c.op]} ${fmt(c.b)}`);
+    svg.append(g_);
+  });
+
+  const layer = s("g", {});
+  svg.append(layer);
+  let newSol = null;
+  const metAt = (o, p) => {
+    const v = o.a[0] * p[0] + o.a[1] * p[1], eps = 1e-7 * (1 + Math.abs(o.t));
+    return o.want === "ge" ? v >= o.t - eps : o.want === "le" ? v <= o.t + eps : Math.abs(v - o.t) <= eps;
+  };
+  const paint = active => {
+    layer.replaceChildren();
+    goals.forEach((o, gi) => {
+      const seg = clipToWindow(o.a[0], o.a[1], o.t, w);
+      if (!seg) return;
+      const moved = Math.abs(o.t - o.t0) > 1e-12;
+      const ok = metAt(o, newSol || sol);
+      const col = ok ? "var(--objective)" : "var(--optimum)";
+      const pos = { x1: sx(seg[0][0]), y1: sy(seg[0][1]), x2: sx(seg[1][0]), y2: sy(seg[1][1]) };
+      const grp = s("g", { class: "cline movable" + (gi === active ? " active" : ""), "data-g": gi },
+        s("line", { class: "vis", ...pos, stroke: moved ? "var(--ink)" : col, "stroke-width": moved ? 2.6 : 2, "stroke-dasharray": moved ? null : "7 4" }),
+        s("line", { class: "hit", ...pos }));
+      tipOn(grp, () => `P${o.p} ${o.name}\n${exprText(o.a, names)} ${{ ge: "≥", le: "≤", eq: "=" }[o.want]} ${fmt(o.t)}${moved ? `\n(原本目標 ${fmt(o.t0)})` : ""}\n↔ 按住拖曳可改變目標值`);
+      layer.append(grp);
+      // 標籤 + 指向「希望的一側」的小箭頭
+      const t = 0.18 + 0.64 * ((gi * 0.37) % 1), mx_ = seg[0][0] + (seg[1][0] - seg[0][0]) * t, my_ = seg[0][1] + (seg[1][1] - seg[0][1]) * t;
+      const nx = o.a[0] / (w.xh - w.xl), ny = o.a[1] / (w.yh - w.yl), nl = Math.hypot(nx, ny) || 1;
+      const sign = o.want === "le" ? -1 : 1, ux = (sign * nx) / nl, uy = (-sign * ny) / nl;
+      const px = sx(mx_), py = sy(my_);
+      if (o.want !== "eq") {
+        layer.append(s("line", { x1: px, y1: py, x2: px + ux * 22, y2: py + uy * 22, stroke: col, "stroke-width": 2, "pointer-events": "none" }),
+          s("circle", { cx: px + ux * 22, cy: py + uy * 22, r: 3, fill: col, "pointer-events": "none" }));
+      }
+      layer.append(s("text", { class: "halo", x: px - ux * 8, y: py - uy * 8 - 4, "font-size": 12, "font-weight": 700, fill: col, "text-anchor": "middle", "pointer-events": "none" },
+        `P${o.p} ${o.name}${moved ? `(${fmt(o.t0)}→${fmt(o.t)})` : ""}`));
+    });
+    const dot = (p, cls) => {
+      layer.append(s("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 8, fill: cls === "new" ? "var(--panel)" : "var(--optimum)", stroke: "var(--optimum)", "stroke-width": cls === "new" ? 3 : 2.5, "pointer-events": "none" }),
+        s("text", { class: "halo", x: sx(p[0]) + 11, y: sy(p[1]) + 20, "font-size": 12, "font-weight": 700, "pointer-events": "none" }, `${cls === "new" ? "新解 " : "最滿意解 "}(${r2(p[0])}, ${r2(p[1])})`));
+    };
+    dot(sol, "sol");
+    if (newSol && Math.hypot(newSol[0] - sol[0], newSol[1] - sol[1]) > 1e-7 * (1 + Math.abs(sol[0]) + Math.abs(sol[1]))) dot(newSol, "new");
+  };
+
+  // 試算點
+  const out = h("div", { class: "probe-out", "aria-live": "polite" });
+  const knobDot = s("circle", { class: "ring", r: 9, fill: "var(--objective)", stroke: "var(--panel)", "stroke-width": 2.5 });
+  const knob = s("g", { class: "probe drag", tabindex: 0, role: "slider", "aria-label": "試算點" }, s("circle", { r: 18, fill: "transparent" }), knobDot);
+  svg.append(knob);
+  let cur = [...sol];
+  const show = () => {
+    knob.setAttribute("transform", `translate(${sx(cur[0])},${sy(cur[1])})`);
+    const feas = probeEval({ c: [0, 0], hps: hard, integer: null }, cur[0], cur[1]);
+    knobDot.setAttribute("fill", feas.feasible ? "var(--objective)" : "var(--ink-2)");
+    out.replaceChildren(...[h("span", {}, "試算點 ", h("b", {}, `${names[0]} = ${r2(cur[0])},${names[1]} = ${r2(cur[1])}`)),
+      ...goals.map(o => h("span", { class: "pill " + (metAt(o, cur) ? "ok" : "bad") }, `P${o.p} ${o.name} ${metAt(o, cur) ? "✓" : "✗"}`)),
+      feas.feasible ? null : h("span", { class: "hint", style: "margin:0" }, "違反系統限制:" + feas.bad.join("、")),
+      h("button", { class: "btn icon", type: "button", onclick: () => { cur = [...sol]; show(); } }, "回到最滿意解")].filter(Boolean));
+  };
+  const xStep = GP.vars[0].kind !== "cont" && GP.vars[0].kind !== "free" ? 1 : Math.pow(10, Math.floor(Math.log10((w.xh - w.xl) / 100)));
+  const yStep = GP.vars[1].kind !== "cont" && GP.vars[1].kind !== "free" ? 1 : Math.pow(10, Math.floor(Math.log10((w.yh - w.yl) / 100)));
+  const snapTo = (v, st) => parseFloat((Math.round(v / st) * st).toFixed(10));
+
+  // 假設分析:放開目標線後重新逐層求解
+  const what = h("div", { class: "whatif", hidden: true, "aria-live": "polite" });
+  const resolve = async () => {
+    const changed = goals.filter(o => Math.abs(o.t - o.t0) > 1e-12);
+    if (!changed.length) { newSol = null; what.hidden = true; paint(); return; }
+    what.hidden = false; what.replaceChildren(h("span", {}, "重新求解中…"));
+    try {
+      const body = { vars: GP.vars, hard: GP.hard, goals: GP.goals.map((g, k) => {
+        const o = goals.find(q => q.k === k);
+        return { ...g, target: o ? o.t : g.target, dev: (g.dev || []).map(d => ({ ...d })) };
+      }) };
+      const nr = await api("/api/goal", body);
+      newSol = [nr.x[0].value, nr.x[1].value];
+      const nOk = nr.goals.filter(g => g.achieved).length, oOk = r.goals.filter(g => g.achieved).length;
+      what.replaceChildren(
+        h("div", {}, h("b", {}, "假設分析:"), changed.map((o, i) => h("span", {}, `${i ? "、" : ""}${o.name} 目標 ${fmt(o.t0)} → `, h("b", {}, fmt(o.t))))),
+        h("div", { class: "whatif-res" }, h("span", {}, "新的最滿意解 ", h("b", {}, `${names[0]} = ${r2(newSol[0])},${names[1]} = ${r2(newSol[1])}`),
+          Math.hypot(newSol[0] - sol[0], newSol[1] - sol[1]) < 1e-7 * (1 + Math.abs(sol[0]) + Math.abs(sol[1])) ? "(解不變)" : null),
+          h("span", {}, `達成 ${nOk} / ${nr.goals.length} 個目標`, nOk !== oOk ? h("span", { class: "delta " + (nOk > oOk ? "up" : "down") }, `(原本 ${oOk} 個)`) : null),
+          h("span", { class: "hint", style: "margin:0" }, "未達成:" + (nr.goals.filter(g => !g.achieved).map(g => `P${g.priority} ${g.name}`).join("、") || "無"))),
+        h("div", { class: "row", style: "margin:6px 0 0" },
+          h("button", { class: "btn icon", type: "button", onclick: () => { goals.forEach(o => { o.t = o.t0; }); newSol = null; what.hidden = true; paint(); } }, "還原目標"),
+          h("button", { class: "btn icon", type: "button", onclick: () => {
+            changed.forEach(o => { GP.goals[o.k].target = o.t; });
+            renderGoal(); $("#view-goal button.primary").click();
+          } }, "套用到左邊的模型")));
+    } catch (e) { newSol = null; what.replaceChildren(h("span", { class: "pill bad" }, e.message)); }
+    paint();
+  };
+
+  let mode = null;
+  dragOn(svg, svg, (pt, phase) => {
+    if (phase === "end") { const m_ = mode; mode = null; if (m_ && m_.g != null) resolve(); return; }
+    if (mode.g != null) {
+      if (phase === "start") return;
+      const o = goals[mode.g];
+      const dlt = (o.a[0] * ix(pt.x) + o.a[1] * iy(pt.y)) - (o.a[0] * ix(mode.p0.x) + o.a[1] * iy(mode.p0.y));
+      const scale = Math.max(Math.abs(o.t0), Math.abs(o.a[0]) * (w.xh - w.xl), Math.abs(o.a[1]) * (w.yh - w.yl), 1e-9);
+      const stp = Math.pow(10, Math.floor(Math.log10(scale)) - 1);
+      o.t = parseFloat((Math.round((mode.b0 + dlt) / stp) * stp).toFixed(10));
+      paint(mode.g);
+    } else { cur = [snapTo(clamp(ix(pt.x), w.xl, w.xh), xStep), snapTo(clamp(iy(pt.y), w.yl, w.yh), yStep)]; show(); }
+  }, e => {
+    const cl = e.target.closest(".cline.movable");
+    mode = cl ? { g: Number(cl.dataset.g), p0: svgPoint(svg, e), b0: goals[Number(cl.dataset.g)].t } : { g: null };
+    return true;
+  });
+  knob.addEventListener("keydown", e => {
+    const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+    if (!k) return;
+    e.preventDefault();
+    const m_ = e.shiftKey ? 10 : 1;
+    cur = [snapTo(cur[0] + k[0] * xStep * m_, xStep), snapTo(cur[1] + k[1] * yStep * m_, yStep)]; show();
+  });
+  paint(); show();
+
+  const skipped = GP.goals.length - goals.length;
+  return h("div", { class: "card" }, h("h2", {}, "圖形化分析(可互動)"),
+    h("p", { class: "hint" }, "每條虛線是一個目標,小箭頭指向「希望的那一側」;橘色 = 最滿意解有達成,紅色 = 沒達成。① 按住目標線拖曳可以改變目標值,放開後會重新逐層求解。② 在其他地方拖曳可移動試算點,檢查那一點滿足哪些目標。"),
+    svg, what, out,
+    h("div", { class: "legend" },
+      h("span", {}, h("i", { style: "border-color:var(--objective);border-top-style:dashed" }), "已達成的目標"),
+      h("span", {}, h("i", { style: "border-color:var(--optimum);border-top-style:dashed" }), "未達成的目標"),
+      hard.some(c => !c.bound) && h("span", {}, h("i", { class: "box" }), "系統限制的可行區域")),
+    skipped > 0 && h("p", { class: "hint" }, `另有 ${skipped} 個目標含有其他離差變數(例如加班時數),無法畫成一條直線,請參考上方的達成情形。`));
+}
+
 function gpShowResult() {
   const box = $("#gp-result");
   box.replaceChildren();
@@ -194,28 +404,26 @@ function gpShowResult() {
       `${r.is_integer ? "已求得最滿意整數解" : "已求得最滿意解"}:${r.goals.length} 個目標中達成 ${nOk} 個。`), ans,
     h("h3", {}, "結果解讀"), h("ul", { class: "notes" }, r.summary.map(t => h("li", {}, t)))));
 
-  // 2. 各目標達成情形(長條:實際值;刻度:目標值)
-  const WANT = { ge: "希望至少", le: "希望不超過", eq: "希望剛好" };
-  const goals = r.goals.map((g, i) => ({ g, i })).sort((a, b) => a.g.priority - b.g.priority || a.i - b.i).map(o => o.g);
-  const goalBar = g => {
-    const neg = g.value < -1e-9 || g.target < -1e-9;
-    const mx = Math.max(Math.abs(g.value), Math.abs(g.target)) || 1;
-    const dev = [g.dminus > 1e-9 && `不足 ${fmt(g.dminus)}`, g.dplus > 1e-9 && `超過 ${fmt(g.dplus)}`].filter(Boolean).join("、");
-    const sub = `${g.achieved ? "✓ 達成" : "✗ 未達成"}${dev ? `(${dev})` : ""} · ${WANT[g.want] || "目標"} ${fmt(g.target)}`;
-    return barRow({ name: `P${g.priority} ${g.name}`, frac: neg ? 0 : Math.abs(g.value) / mx, mark: neg ? null : Math.abs(g.target) / mx,
-      cls: g.achieved ? "" : "hot", val: `${fmt(g.value)} / ${fmt(g.target)}`, sub,
-      tip: `${g.name}(P${g.priority}${g.weight !== 1 ? `,權重 ${fmt(g.weight)}` : ""})\n${g.text}\nd⁻ = ${fmt(g.dminus)},d⁺ = ${fmt(g.dplus)}` });
-  };
-  box.append(h("div", { class: "card" }, h("h2", {}, "各目標達成情形"),
-    h("p", { class: "hint" }, "依優先順序排列。長條 = 實際值;黑色刻度 = 目標值;紅色表示未達成。高優先目標會先被滿足,再在不犧牲它的前提下照顧較低優先的目標。"),
-    h("div", { class: "bars" }, goals.map(goalBar))));
+  // 2. 圖形(兩個變數時)
+  const gc = gpGraphCard(r);
+  if (gc) box.append(gc);
 
-  // 3. 系統限制
+  // 3. 各目標達成情形
+  const goals = r.goals.map((g, i) => ({ g, i })).sort((a, b) => a.g.priority - b.g.priority || a.i - b.i).map(o => o.g);
+  box.append(h("div", { class: "card" }, h("h2", {}, "各目標達成情形"),
+    h("div", { class: "cap-legend" },
+      h("span", {}, h("i", { class: "sw used" }), "實際值(達成)"),
+      h("span", {}, h("i", { class: "sw hot" }), "實際值(未達成)"),
+      h("span", {}, h("i", { class: "sw mark" }), "目標值")),
+    h("p", { class: "hint" }, "依優先順序排列(P1 最重要)。系統會先滿足高優先的目標,再在不犧牲它的前提下照顧較低優先的目標。"),
+    h("div", { class: "caps" }, goals.map(goalItem))));
+
+  // 4. 系統限制
   if (r.hard.length) box.append(h("div", { class: "card" }, h("h2", {}, "系統限制使用情形"),
     h("div", { class: "caps" }, r.hard.map(c => constraintBar({ name: c.name, lhs: c.lhs, rhs: c.rhs, op: c.op, binding: c.binding,
       slack: Math.abs(c.rhs - c.lhs), shadow: null, text: c.text })))));
 
-  // 4. 公式與逐層過程(預設收合)
+  // 5. 公式與逐層過程(預設收合)
   const steps = h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, "求解次序"), h("th", { class: "l" }, "優先層"),
     h("th", { class: "l" }, "最小化"), h("th", {}, "最小值"), h("th", { class: "l" }, "之後新增的限制"), h("th", { class: "l" }, "狀態"))),
     h("tbody", {}, r.levels.map((lv, i) => h("tr", {}, h("td", { class: "l" }, `第 ${i + 1} 次`), h("td", { class: "l" }, `P${lv.priority}`),

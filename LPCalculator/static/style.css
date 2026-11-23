@@ -212,3 +212,5 @@ svg .cline.movable:hover .vis, svg .cline.active .vis { stroke: var(--ink); stro
 .cap-legend .sw.hot { background: var(--optimum); border-color: var(--optimum); }
 .cap-legend .sw.left { background: repeating-linear-gradient(135deg, var(--line-soft) 0 3px, transparent 3px 6px); }
 .cap-legend .sw.mark { width: 3px; background: var(--ink); border: 0; }
+
+.pri-tag { display: inline-block; font-size: 12px; font-weight: 700; color: var(--panel); background: var(--ink-2); border-radius: 4px; padding: 0 6px; }

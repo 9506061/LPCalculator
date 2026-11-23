@@ -779,7 +779,7 @@ function showGeneralResult() {
 }
 
 // =====================================================================
-// 管理科學範本
+// 管理問題
 // =====================================================================
 const T = {
   kind: "transport", result: null, error: null, preview: null,
@@ -795,11 +795,11 @@ const T = {
 };
 const T_GROUPS = [
   ["基本模型", { transport: "運輸問題", assignment: "指派問題", blending: "混合問題", production: "生產計劃問題" }],
-  ["W6 整數規劃", { selection: "0-1 方案選擇(邏輯限制式)", facility: "固定費用與設施區位", covering: "區域涵蓋問題(Set Covering)" }],
-  ["W8 網路模式", { transship: "轉運模式(Transshipment)", shortest: "最短路徑問題", maxflow: "最大流量問題" }],
+  ["整數規劃", { selection: "0-1 方案選擇(邏輯限制式)", facility: "固定費用與設施區位", covering: "區域涵蓋問題(Set Covering)" }],
+  ["網路模式", { transship: "轉運模式(Transshipment)", shortest: "最短路徑問題", maxflow: "最大流量問題" }],
 ];
 const T_NAMES = Object.assign({}, ...T_GROUPS.map(g => g[1]));
-const T_STORY = {};     // 各範本預設資料的題目敘述(由 ext.js 填入)
+const T_STORY = {};     // 各問題類型預設資料的題目敘述(由 ext.js 填入)
 const EXT_INPUTS = {};   // 由 ext.js 註冊:kind -> (left, d) => void
 const EXT_EXTRA = {};    // 由 ext.js 註冊:extra.type -> (res, box) => void
 
@@ -832,10 +832,10 @@ function renderTemplate() {
   const left = h("div", {}), right = h("div", { id: "t-result" });
   root.append(h("div", { class: "layout" }, left, right));
 
-  const kinds = h("select", { "aria-label": "選擇範本" }, T_GROUPS.map(([g, items]) =>
+  const kinds = h("select", { "aria-label": "選擇問題類型" }, T_GROUPS.map(([g, items]) =>
     h("optgroup", { label: g }, Object.entries(items).map(([k, n]) => h("option", { value: k, selected: T.kind === k }, n)))));
   kinds.addEventListener("change", () => { T.kind = kinds.value; T.result = null; T.error = null; T.preview = null; renderTemplate(); });
-  left.append(h("div", { class: "card" }, h("h2", {}, "Step 1:選擇範本"), h("div", { class: "row" }, h("label", { class: "field" }, "範本", kinds)),
+  left.append(h("div", { class: "card" }, h("h2", {}, "Step 1:選擇問題類型"), h("div", { class: "row" }, h("label", { class: "field" }, "問題類型", kinds)),
     h("div", { class: "steps" }, ["資料輸入", "建立模型", "求解", "結果分析"].map((t, i) => h("span", { class: i === 0 ? "on" : "" }, `${i + 1}. ${t}`)))));
 
   const st = T_STORY[T.kind];
@@ -913,32 +913,20 @@ function renderTemplate() {
 
   const out = right;
   if (T.error) out.append(h("div", { class: "banner err" }, T.error));
-  if (T.result) { out.append(templateExtra(T.result)); out.append(resultCards(T.result, { compact: !!T.result.extra })); }
+  if (T.result) {
+    // 生產計劃(2 種產品)可把圖上拖曳後的資源量套用回輸入資料
+    const onApply = T.kind === "production" ? changes => {
+      changes.forEach(({ i, b }) => { if (d.resources[i]) d.resources[i].avail = b; });
+      run("solve", b2);
+    } : null;
+    out.append(templateExtra(T.result)); out.append(resultCards(T.result, { compact: !!T.result.extra, onApply }));
+  }
   else if (!T.error) out.append(h("div", { class: "empty" }, "輸入資料後按「建立模型」查看自動產生的數學模型,按「求解」取得最佳方案與分析。"));
 }
 
 function templateExtra(res) {
   const ex = res.extra, box = h("div", {});
-  if (!ex) return box;
-  if (EXT_EXTRA[ex.type]) {
-    EXT_EXTRA[ex.type](res, box);
-  } else if (ex.type === "transport") {
-    const plan = h("table", { class: "data" }, h("thead", {}, h("tr", {}, ["來源地", "目的地", "最佳運輸量", "單位成本", "小計"].map((t, i) => h("th", { class: i < 2 ? "l" : "" }, t)))),
-      h("tbody", {}, ex.plan.map(p => h("tr", {}, h("td", { class: "l" }, p.from), h("td", { class: "l" }, p.to), h("td", {}, fmt(p.qty)), h("td", {}, fmt(p.cost)), h("td", {}, fmt(p.subtotal))))));
-    const flow = h("table", { class: "data flow" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, ""), ex.dests.map(n => h("th", {}, n)))),
-      h("tbody", {}, ex.sources.map((n, i) => h("tr", {}, h("th", { class: "l" }, n), ex.dests.map((_, j) => h("td", { class: ex.flow[i][j] > 1e-9 ? "hit" : "" }, fmt(ex.flow[i][j])))))));
-    const sup = h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, "供給地"), h("th", {}, "供應量"), h("th", {}, "運出"), h("th", {}, "剩餘"))),
-      h("tbody", {}, ex.supply_rows.map(r => h("tr", {}, h("td", { class: "l" }, r.name), h("td", {}, fmt(r.supply)), h("td", {}, fmt(r.used)), h("td", {}, fmt(r.left))))));
-    const dem = h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, "需求地"), h("th", {}, "需求量"), h("th", {}, "收到"), h("th", { class: "l" }, "是否滿足"))),
-      h("tbody", {}, ex.demand_rows.map(r => h("tr", {}, h("td", { class: "l" }, r.name), h("td", {}, fmt(r.demand)), h("td", {}, fmt(r.received)), h("td", { class: "l" }, h("span", { class: "pill " + (r.met ? "good" : "bind") }, r.met ? "滿足" : "未滿足"))))));
-    box.append(h("div", { class: "card" }, h("h2", {}, "最佳運輸方案"), h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, "最小總運輸成本 Z*"), h("b", {}, fmt(res.z)))),
-      h("div", { class: "scroll-x" }, plan), h("h3", {}, "運輸量矩陣"), h("div", { class: "scroll-x" }, flow),
-      h("h3", {}, "供給與需求分析"), h("div", { class: "scroll-x" }, sup), h("div", { class: "scroll-x", style: "margin-top:10px" }, dem),
-      h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t)))));
-  } else if (ex.type === "assignment") {
-    box.append(h("div", { class: "card" }, h("h2", {}, "最佳指派方案"), h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, "Z*"), h("b", {}, fmt(res.z)))),
-      h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t)))));
-  }
+  if (ex && EXT_EXTRA[ex.type]) EXT_EXTRA[ex.type](res, box);   // 各問題類型的結果卡片(ext.js)
   return box;
 }
 

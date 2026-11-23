@@ -1,5 +1,5 @@
 "use strict";
-/* ext.js -- W6 整數規劃、W8 網路模式 範本的輸入介面、結果表格與網路圖 */
+/* ext.js -- 管理問題:W6 整數規劃、W8 網路模式的輸入介面、結果與網路圖 */
 
 // ---------------------------------------------------------------- 預設資料(課堂例題)
 const APS_CITIES = ["Atlanta", "Boston", "Charlotte", "Cincinnati", "Detroit", "Indianapolis", "Milwaukee", "Nashville",
@@ -138,7 +138,7 @@ function ruleFormula(r, n) {
 }
 
 EXT_INPUTS.selection = (left, d) => {
-  left.append(hintCard("模型說明(W6 0-1 整數規劃)", [
+  left.append(hintCard("模型說明(0-1 整數規劃)", [
     "決策變數 x<sub>i</sub> = 1 表示選擇(執行)方案 i,0 表示不選。",
     "資源限制:例如預算、土地;邏輯限制:互斥、條件(若 P 則 Q)、共軛、至少/至多 k 個…",
     "沒有資源資料的練習題(只建立邏輯限制式)可把目標係數都設為 1,用「最小化」找出最少的可行組合。"]));
@@ -229,20 +229,6 @@ EXT_INPUTS.facility = (left, d) => {
       { title: "固定成本", cell: i => numInput(() => d.facilities[i].fixed, v => d.facilities[i].fixed = v) },
       { title: "產能", cell: i => numInput(() => d.facilities[i].cap, v => d.facilities[i].cap = v) }],
       { title: "需求量", cell: j => numInput(() => d.customers[j].demand, v => d.customers[j].demand = v) }, "設施＼需求點")));
-};
-
-EXT_EXTRA.facility = (res, box) => {
-  const ex = res.extra;
-  const flow = h("table", { class: "data flow" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, ""), ex.dests.map(n => h("th", {}, n)))),
-    h("tbody", {}, ex.sources.map((n, i) => h("tr", {}, h("th", { class: "l" }, n), ex.dests.map((_, j) => h("td", { class: ex.flow[i][j] > 1e-9 ? "hit" : "" }, fmt(ex.flow[i][j])))))));
-  box.append(h("div", { class: "card" }, h("h2", {}, "最佳設施區位方案"),
-    h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, "最小總成本 Z*"), h("b", {}, fmt(res.z))),
-      h("div", { class: "cell" }, h("small", {}, "固定成本"), h("b", {}, fmt(ex.fixed_total))),
-      h("div", { class: "cell" }, h("small", {}, "運輸成本"), h("b", {}, fmt(ex.trans_total)))),
-    dataTable(["設施", "·是否設置", "固定成本", "產能", "運出量"], ex.rows.map(r => h("tr", {}, h("td", { class: "l" }, r.name),
-      h("td", { class: "l" }, pill(r.open, "設置 (y=1)", "不設置 (y=0)")), h("td", {}, fmt(r.fixed)), h("td", {}, fmt(r.cap)), h("td", {}, fmt(r.ship))))),
-    h("h3", {}, "運送量矩陣 x_ij"), h("div", { class: "scroll-x" }, flow),
-    h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t)))));
 };
 
 // =====================================================================
@@ -407,13 +393,14 @@ function drawNetwork(net, mode, preview = false) {
   svg.append(defs, arcLayer, labelLayer, nodeLayer);
 
   const has = new Set(net.arcs.map(a => `${a.from}-${a.to}`));
-  const valWord = mode === "maxflow" ? "容量" : mode === "shortest" ? "距離" : "單位成本";
+  const valWord = net.valWord || (mode === "maxflow" ? "容量" : mode === "shortest" ? "距離" : "單位成本");
   const arcTip = a => {
     let t = `${net.nodes[a.from]} → ${net.nodes[a.to]}\n${valWord} ${a.label}`;
     if (!preview) {
       const used = a.flow > 1e-9;
       if (mode === "maxflow") t += `\n流量 ${fmt(a.flow)}${used && Math.abs(a.flow - Number(a.label)) < 1e-6 ? "(滿載)" : ""}`;
-      else if (mode === "transship") t += `\n運送量 ${fmt(a.flow)}${used ? `,小計 ${fmt(a.flow * Number(a.label))}` : ""}`;
+      else if (mode === "transship" || mode === "transport") t += `\n運送量 ${fmt(a.flow)}${used ? `,小計 ${fmt(a.flow * Number(a.label))}` : ""}`;
+      else if (mode === "assign") t += used ? "\n✓ 指派" : "\n未指派";
       else t += used ? "\n✓ 在最短路徑上" : "\n未經過";
     }
     return t;
@@ -424,6 +411,7 @@ function drawNetwork(net, mode, preview = false) {
   const paintArcs = () => {
     arcLayer.replaceChildren(); labelLayer.replaceChildren(); arcEls.length = 0;
     net.arcs.forEach(a => {
+      if (!preview && net.arcs.length > 30 && !(a.flow > 1e-9)) return;   // 弧線太多時只畫有使用的
       const p = pos[a.from], q = pos[a.to];
       const dx = q.x - p.x, dy = q.y - p.y; const len = Math.hypot(dx, dy) || 1; const ux = dx / len, uy = dy / len;
       const twin = has.has(`${a.to}-${a.from}`), off = twin ? 7 : 0;
@@ -439,8 +427,8 @@ function drawNetwork(net, mode, preview = false) {
       arcLayer.append(grp); arcEls.push({ a, grp });
       const t = twin ? 0.32 : 0.5;
       let txt = a.label;
-      if (!preview && used) txt = mode === "maxflow" ? `${fmt(a.flow)}/${a.label}` : mode === "transship" ? `${fmt(a.flow)} @${a.label}` : a.label;
-      else if (mode === "transship") txt = `@${a.label}`;
+      if (!preview && used) txt = mode === "maxflow" ? `${fmt(a.flow)}/${a.label}` : (mode === "transship" || mode === "transport") ? `${fmt(a.flow)} @${a.label}` : a.label;
+      else if (mode === "transship" || mode === "transport") txt = `@${a.label}`;
       labelLayer.append(s("text", { class: "halo", x: x1 + (x2 - x1) * t + ox * 1.6, y: y1 + (y2 - y1) * t + oy * 1.6 - 3, "text-anchor": "middle",
         "font-size": 12, "font-weight": used ? 700 : 400, style: used ? "fill:var(--optimum)" : null }, txt));
     });
@@ -451,8 +439,8 @@ function drawNetwork(net, mode, preview = false) {
     const special = v === net.src || v === net.dst;
     const kind = net.kinds && net.kinds[v];
     const strokeVar = special ? "var(--optimum)" : kind === "trans" ? "var(--objective)" : "var(--feasible)";
-    const cap = kind ? KCAP[kind] : v === net.src ? (mode === "maxflow" ? "Source" : "起點") : v === net.dst ? (mode === "maxflow" ? "Sink" : "終點") : null;
-    const grp = s("g", { class: "drag node", tabindex: 0, "aria-label": `節點 ${nm}(可拖曳)` },
+    const cap = net.caps && net.caps[v] != null ? net.caps[v] : kind ? KCAP[kind] : v === net.src ? (mode === "maxflow" ? "Source" : "起點") : v === net.dst ? (mode === "maxflow" ? "Sink" : "終點") : null;
+    const grp = s("g", { class: "drag node", opacity: net.dim && net.dim[v] ? 0.45 : null, tabindex: 0, "aria-label": `節點 ${nm}(可拖曳)` },
       s("rect", { x: -half[v], y: -20, width: half[v] * 2, height: 40, rx: 20, style: `fill:var(--panel);stroke:${strokeVar}`, "stroke-width": 2.5 }),
       s("text", { x: 0, y: 5, "text-anchor": "middle", "font-size": 14, "font-weight": 700 }, nm),
       cap && s("text", { class: "tick halo", x: 0, y: 34, "text-anchor": "middle" }, cap));
@@ -520,4 +508,60 @@ EXT_EXTRA.network = (res, box) => {
   }
   card.append(h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t))));
   box.append(card);
+};
+
+// ---------------------------------------------------------------- 兩群節點的網路圖(運輸、指派、設施區位)
+function bipartiteNet(srcNames, dstNames, cost, flow, opts = {}) {
+  const m = srcNames.length, nodes = [...srcNames, ...dstNames];
+  const arcs = [];
+  srcNames.forEach((_, i) => {
+    if (opts.dropFrom && opts.dropFrom[i]) return;
+    dstNames.forEach((_, j) => arcs.push({ from: i, to: m + j, label: fmt(cost[i] ? cost[i][j] : 0), flow: flow[i][j] }));
+  });
+  return { nodes, kinds: nodes.map((_, i) => (i < m ? "supply" : "demand")), src: null, dst: null,
+    caps: opts.caps, dim: opts.dim, valWord: opts.valWord, arcs };
+}
+const netLegend = (used, unused = "未使用的路線") => h("div", { class: "legend" },
+  h("span", {}, h("i", { style: "border-color:var(--optimum)" }), used),
+  h("span", {}, h("i", { style: "border-color:var(--ink-2);opacity:.5" }), unused));
+
+EXT_EXTRA.transport = (res, box) => {
+  const ex = res.extra, d = T.transport;
+  const net = bipartiteNet(ex.sources, ex.dests, d.cost, ex.flow, {
+    caps: [...ex.supply_rows.map(r => `供應 ${fmt(r.supply)}`), ...ex.demand_rows.map(r => `需求 ${fmt(r.demand)}`)] });
+  box.append(h("div", { class: "card" }, h("h2", {}, "最佳運輸方案"),
+    h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, "最小總運輸成本 Z*"), h("b", {}, fmt(res.z)))),
+    drawNetwork(net, "transport"), netLegend("有運送的路線(運量 @單位運費)"),
+    h("h3", {}, "各路線運送量"), dataTable(["·來源地", "·目的地", "運送量", "單位運費", "小計"],
+      ex.plan.map(p => h("tr", {}, h("td", { class: "l" }, p.from), h("td", { class: "l" }, p.to), h("td", {}, fmt(p.qty)), h("td", {}, fmt(p.cost)), h("td", {}, fmt(p.subtotal))))),
+    h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t)))));
+};
+
+EXT_EXTRA.assignment = (res, box) => {
+  const ex = res.extra, d = T.assignment;
+  const wn = d.workers.map((w, i) => w.name || `人員${i + 1}`), jn = d.jobs.map((j, i) => j.name || `工作${i + 1}`), k = jn.length;
+  const flow = wn.map((_, i) => jn.map((_, j) => (res.x[i * k + j] && res.x[i * k + j].value > 0.5 ? 1 : 0)));
+  const word = ex.sense === "max" ? "效益" : "成本";
+  const net = bipartiteNet(wn, jn, d.cost, flow, { caps: [...wn.map(() => "人員"), ...jn.map(() => "工作")], valWord: word });
+  box.append(h("div", { class: "card" }, h("h2", {}, "最佳指派方案"),
+    h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, ex.sense === "max" ? "最大總效益 Z*" : "最小總成本 Z*"), h("b", {}, fmt(res.z)))),
+    drawNetwork(net, "assign"), netLegend(`指派(線上數字為${word})`, "未指派"),
+    h("h3", {}, "指派結果"), dataTable(["·人員", "·負責工作", word],
+      ex.pairs.map(p => h("tr", {}, h("td", { class: "l" }, p.worker), h("td", { class: "l" }, p.job), h("td", {}, fmt(p.value)))))));
+};
+
+EXT_EXTRA.facility = (res, box) => {
+  const ex = res.extra, d = T.facility;
+  const closed = ex.rows.map(r => !r.open);
+  const net = bipartiteNet(ex.sources, ex.dests, d.cost, ex.flow, {
+    caps: [...ex.rows.map(r => (r.open ? `設置 · 產能 ${fmt(r.cap)}` : "不設置")), ...d.customers.map(c => `需求 ${fmt(c.demand)}`)],
+    dim: [...closed, ...ex.dests.map(() => false)], dropFrom: closed });
+  box.append(h("div", { class: "card" }, h("h2", {}, "最佳設施區位方案"),
+    h("div", { class: "answer" }, h("div", { class: "cell z" }, h("small", {}, "最小總成本 Z*"), h("b", {}, fmt(res.z))),
+      h("div", { class: "cell" }, h("small", {}, "固定成本"), h("b", {}, fmt(ex.fixed_total))),
+      h("div", { class: "cell" }, h("small", {}, "運輸成本"), h("b", {}, fmt(ex.trans_total)))),
+    drawNetwork(net, "transport"), netLegend("有運送的路線(運量 @單位運費)", "可用但未使用的路線(不設置的設施已淡化)"),
+    h("h3", {}, "各設施的決策"), dataTable(["設施", "·是否設置", "固定成本", "產能", "運出量"], ex.rows.map(r => h("tr", {}, h("td", { class: "l" }, r.name),
+      h("td", { class: "l" }, pill(r.open, "設置", "不設置")), h("td", {}, fmt(r.fixed)), h("td", {}, fmt(r.cap)), h("td", {}, fmt(r.ship))))),
+    h("ul", { class: "notes" }, ex.text.map(t => h("li", {}, t)))));
 };
