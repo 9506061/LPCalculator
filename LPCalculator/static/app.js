@@ -163,7 +163,7 @@ function modelTextLines(m) {
   return lines.concat(kindLines(m.vars));
 }
 
-// ---------- 圖形(可互動) ----------
+// ---------- 圖形(可互動:拖曳限制式邊界線、試算點) ----------
 function clipToWindow(a1, a2, b, w) {
   const pts = [];
   if (Math.abs(a2) > 1e-12) for (const x of [w.xl, w.xh]) { const y = (b - a1 * x) / a2; if (y >= w.yl - 1e-9 && y <= w.yh + 1e-9) pts.push([x, y]); }
@@ -173,26 +173,91 @@ function clipToWindow(a1, a2, b, w) {
   pts.forEach(p => { if (!out.some(q => Math.abs(q[0] - p[0]) < tol && Math.abs(q[1] - p[1]) < tol)) out.push(p); });
   return out.length >= 2 ? [out[0], out[out.length - 1]] : null;
 }
-function probeEval(g, x, y) {
-  const z = g.c[0] * x + g.c[1] * y, bad = [];
-  (g.hps || []).forEach(hp => {
+// 保留 a·p ≤ b 的那一側(Sutherland–Hodgman)
+function clipPoly(poly, a1, a2, b) {
+  const val = p => a1 * p[0] + a2 * p[1] - b, eps = 1e-9 * (1 + Math.abs(b)), out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], vp = val(p), vq = val(q);
+    if (vp <= eps) out.push(p);
+    if ((vp < -eps && vq > eps) || (vp > eps && vq < -eps)) { const t = vp / (vp - vq); out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]); }
+  }
+  return out;
+}
+function regionIn(hps, box) {
+  let poly = [[box.xl, box.yl], [box.xh, box.yl], [box.xh, box.yh], [box.xl, box.yh]];
+  for (const hp of hps) {
+    if (hp.op !== ">=") poly = clipPoly(poly, hp.a[0], hp.a[1], hp.b);
+    if (hp.op !== "<=") poly = clipPoly(poly, -hp.a[0], -hp.a[1], -hp.b);
+    if (!poly.length) break;
+  }
+  return poly;
+}
+function probeEval(st, x, y) {
+  const z = st.c[0] * x + st.c[1] * y, bad = [];
+  st.hps.forEach(hp => {
     const v = hp.a[0] * x + hp.a[1] * y, tol = 1e-7 * (1 + Math.abs(hp.b));
     if ((hp.op === "<=" && v > hp.b + tol) || (hp.op === ">=" && v < hp.b - tol) || (hp.op === "=" && Math.abs(v - hp.b) > tol)) bad.push(hp.name);
   });
-  const nonInt = (g.integer || []).some((f, j) => f && Math.abs([x, y][j] - Math.round([x, y][j])) > 1e-9);
+  const nonInt = (st.integer || []).some((f, j) => f && Math.abs([x, y][j] - Math.round([x, y][j])) > 1e-9);
   return { x, y, z, bad, nonInt, feasible: !bad.length && !nonInt };
 }
+// 兩變數模型在瀏覽器端重新求解(拖曳限制式時即時更新)
+function solve2(st) {
+  const w = st.window, hps = st.hps, better = (a, b) => (st.sense === "max" ? a > b : a < b);
+  const Z = p => st.c[0] * p[0] + st.c[1] * p[1];
+  const feas = p => probeEval({ ...st, integer: null }, p[0], p[1]).feasible;
+  const pts = [];
+  for (let i = 0; i < hps.length; i++) for (let j = i + 1; j < hps.length; j++) {
+    const [a1, a2] = hps[i].a, [d1, d2] = hps[j].a, det = a1 * d2 - a2 * d1;
+    if (Math.abs(det) < 1e-12) continue;
+    const p = [(hps[i].b * d2 - a2 * hps[j].b) / det, (a1 * hps[j].b - hps[i].b * d1) / det];
+    if (feas(p) && !pts.some(q => Math.abs(q[0] - p[0]) < 1e-7 && Math.abs(q[1] - p[1]) < 1e-7)) pts.push(p);
+  }
+  const polygon = regionIn(hps, w);
+  // 用很大的方框檢查是否無界
+  const big = Math.max(w.xh - w.xl, w.yh - w.yl) * 1e4;
+  const huge = regionIn(hps, { xl: w.xl - big, xh: w.xh + big, yl: w.yl - big, yh: w.yh + big });
+  let status = "optimal", opt = null;
+  if (!huge.length) status = "infeasible";
+  else {
+    const hb = huge.reduce((a, p) => (better(Z(p), Z(a)) ? p : a));
+    const vb = pts.length ? pts.reduce((a, p) => (better(Z(p), Z(a)) ? p : a)) : null;
+    if (!vb || better(Z(hb), Z(vb) + (st.sense === "max" ? 1 : -1) * 1e-6 * (1 + Math.abs(Z(vb))))) status = "unbounded";
+    else opt = vb;
+  }
+  let lattice = [];
+  const allInt = st.integer && st.integer.every(Boolean);
+  if (allInt && status !== "infeasible") {
+    const xs = [], ys = [];
+    for (let i = Math.ceil(w.xl); i <= Math.floor(w.xh); i++) xs.push(i);
+    for (let j = Math.ceil(w.yl); j <= Math.floor(w.yh); j++) ys.push(j);
+    if (xs.length * ys.length <= 40000) {
+      xs.forEach(i => ys.forEach(j => { if (feas([i, j])) lattice.push([i, j]); }));
+      if (status === "optimal") {
+        opt = lattice.length ? lattice.reduce((a, p) => (better(Z(p), Z(a)) ? p : a)) : null;
+        if (!opt) status = "infeasible";
+      }
+    }
+  }
+  const vertices = pts.filter(p => p[0] >= w.xl - 1e-7 && p[0] <= w.xh + 1e-7 && p[1] >= w.yl - 1e-7 && p[1] <= w.yh + 1e-7)
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .map(p => ({ x: p[0], y: p[1], z: Z(p), optimal: !!(opt && Math.abs(p[0] - opt[0]) < 1e-7 && Math.abs(p[1] - opt[1]) < 1e-7) }));
+  return { status, polygon, vertices, lattice, opt: opt && { x: opt[0], y: opt[1], z: Z(opt) }, zs: pts.map(Z) };
+}
 
-function drawGraph(g, onProbe) {
+function drawGraph(g, hooks = {}) {
   const W = 760, H = 560, M = { l: 64, r: 24, t: 20, b: 56 };
   const w = g.window;
   const sx = x => M.l + ((x - w.xl) / (w.xh - w.xl)) * (W - M.l - M.r);
   const sy = y => H - M.b - ((y - w.yl) / (w.yh - w.yl)) * (H - M.t - M.b);
   const ix = px => w.xl + ((px - M.l) / (W - M.l - M.r)) * (w.xh - w.xl);
   const iy = py => w.yl + ((H - M.b - py) / (H - M.t - M.b)) * (w.yh - w.yl);
-  const interactive = !!(onProbe && g.c && g.hps);
+  const interactive = !!(g.c && g.hps);
   const svg = s("svg", { class: "plot" + (interactive ? " drag" : ""), viewBox: `0 0 ${W} ${H}`, role: "img",
-    "aria-label": "可行區域與最佳解圖形(可拖曳試算點)" });
+    "aria-label": "可行區域與最佳解圖形(可拖曳限制式與試算點)" });
+  // 目前狀態:限制式右端值可被拖曳改變
+  const st = { ...g, hps: (g.hps || []).map((hp, i) => ({ ...hp, b0: hp.b, idx: i })) };
+  const nCons = st.hps.filter(hp => !hp.bound).length;
 
   const nice = (lo, hi) => {
     const raw = (hi - lo) / 7, p = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -214,40 +279,11 @@ function drawGraph(g, onProbe) {
   svg.append(s("text", { x: (M.l + W - M.r) / 2, y: H - 12, "text-anchor": "middle", "font-size": 14 }, `${g.names[0]}(${g.labels[0]})`));
   svg.append(s("text", { x: 16, y: (M.t + H - M.b) / 2, "text-anchor": "middle", "font-size": 14,
     transform: `rotate(-90 16 ${(M.t + H - M.b) / 2})` }, `${g.names[1]}(${g.labels[1]})`));
+  svg.append(s("clipPath", { id: "plotclip" + (drawGraph.n = (drawGraph.n || 0) + 1) },
+    s("rect", { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b })));
+  const clipId = `url(#plotclip${drawGraph.n})`;
 
-  if (g.polygon.length >= 3)
-    svg.append(s("polygon", { points: g.polygon.map(p => `${sx(p[0])},${sy(p[1])}`).join(" "),
-      fill: "var(--feasible-soft)", stroke: "var(--feasible)", "stroke-width": 2 }));
-
-  // 限制式邊界:滑鼠移上去會變色並顯示名稱與式子
-  g.lines.forEach(l => {
-    const pos = { x1: sx(l.p[0][0]), y1: sy(l.p[0][1]), x2: sx(l.p[1][0]), y2: sy(l.p[1][1]) };
-    const grp = s("g", { class: "cline" },
-      s("line", { class: "vis", ...pos, stroke: "var(--ink-2)", "stroke-width": l.bound ? 1 : 1.6, "stroke-dasharray": l.bound ? "2 4" : "6 4" }),
-      s("line", { class: "hit", ...pos }));
-    tipOn(grp, l.text ? `${l.label}\n${l.text}` : l.label);
-    svg.append(grp);
-  });
-  g.lines.filter(l => !l.bound).forEach(l => {
-    const [a, b] = l.p; const t = 0.86;
-    svg.append(s("text", { class: "halo", x: sx(a[0] + (b[0] - a[0]) * t), y: sy(a[1] + (b[1] - a[1]) * t) - 6,
-      "font-size": 12, "text-anchor": "middle", "pointer-events": "none" }, l.label));
-  });
-
-  g.iso.forEach(l => {
-    svg.append(s("line", { x1: sx(l.p[0][0]), y1: sy(l.p[0][1]), x2: sx(l.p[1][0]), y2: sy(l.p[1][1]),
-      stroke: l.optimal ? "var(--optimum)" : "var(--objective)", "stroke-width": l.optimal ? 2.6 : 1.2,
-      "stroke-dasharray": l.optimal ? null : "7 4", opacity: l.optimal ? 1 : 0.55, "pointer-events": "none" }));
-    if (l.optimal) {
-      const [a, b] = l.p;
-      svg.append(s("text", { class: "halo", x: sx((a[0] + b[0]) / 2) + 6, y: sy((a[1] + b[1]) / 2) - 6, "font-size": 12,
-        fill: "var(--optimum)", "pointer-events": "none" }, `Z* = ${fmt(l.z)}`));
-    }
-  });
-
-  g.lattice.forEach(p => svg.append(s("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 2.6, fill: "var(--feasible)", opacity: 0.7, "pointer-events": "none" })));
-
-  // 目標改善方向箭頭
+  // 目標改善方向箭頭(固定)
   const [ix0, iy0] = g.improve, len = Math.hypot(ix0, iy0);
   if (len > 1e-12) {
     const ox = W - M.r - 90, oy = M.t + 70, ux = ix0 / len, uy = -iy0 / len;
@@ -257,47 +293,124 @@ function drawGraph(g, onProbe) {
     svg.append(s("text", { class: "halo", x: ox, y: oy + 52, "text-anchor": "middle", "font-size": 12 }, g.sense === "max" ? "Z 增大方向" : "Z 減小方向"));
   }
 
-  // 試算點:拖曳後即時顯示通過它的等值線
-  let setProbe = null;
+  const layer = s("g", {});
+  svg.append(layer);
+  let sol = null;
+
+  // 依目前狀態重畫:可行區域、限制式、等值線、角點
+  const paint = activeIdx => {
+    sol = interactive ? solve2(st) : { status: g.optimum ? "optimal" : "x", polygon: g.polygon, vertices: g.vertices, lattice: g.lattice, opt: g.optimum, zs: g.vertices.map(v => v.z) };
+    layer.replaceChildren();
+    const poly = sol.polygon;
+    if (poly.length >= 3)
+      layer.append(s("polygon", { points: poly.map(p => `${sx(p[0])},${sy(p[1])}`).join(" "), fill: "var(--feasible-soft)", stroke: "var(--feasible)", "stroke-width": 2, "pointer-events": "none" }));
+    const labels = s("g", { "pointer-events": "none" });
+    (interactive ? st.hps : g.lines).forEach((hp, i) => {
+      const seg = interactive ? clipToWindow(hp.a[0], hp.a[1], hp.b, w) : hp.p;
+      if (!seg) return;
+      const pos = { x1: sx(seg[0][0]), y1: sy(seg[0][1]), x2: sx(seg[1][0]), y2: sy(seg[1][1]) };
+      const label = interactive ? hp.name : hp.label, bound = hp.bound;
+      const moved = interactive && Math.abs(hp.b - hp.b0) > 1e-12;
+      const grp = s("g", { class: "cline" + (bound || !interactive ? "" : " movable") + (i === activeIdx ? " active" : ""), "data-i": bound ? null : i },
+        s("line", { class: "vis", ...pos, stroke: moved ? "var(--ink)" : "var(--ink-2)", "stroke-width": bound ? 1 : moved ? 2.6 : 1.6, "stroke-dasharray": bound ? "2 4" : moved ? null : "6 4" }),
+        s("line", { class: "hit", ...pos }));
+      if (interactive) {
+        const eq = `${exprText(hp.a, g.names)} ${OPSYM[hp.op]} ${fmt(hp.b)}`;
+        tipOn(grp, () => bound ? `${label}` : `${label}\n${eq}${moved ? `\n(原本右端值 ${fmt(hp.b0)})` : ""}\n↔ 按住拖曳可改變右端值`);
+      } else tipOn(grp, hp.text ? `${label}\n${hp.text}` : label);
+      layer.append(grp);
+      if (!bound) {
+        const t = 0.86, a = seg[0], b = seg[1];
+        labels.append(s("text", { class: "halo", x: sx(a[0] + (b[0] - a[0]) * t), y: sy(a[1] + (b[1] - a[1]) * t) - 6, "font-size": 12, "text-anchor": "middle",
+          "font-weight": moved ? 700 : 400 }, moved ? `${label}:${fmt(hp.b0)} → ${fmt(hp.b)}` : label));
+      }
+    });
+    layer.append(labels);
+    // 等值線:兩條參考線 + 通過最佳解的實線
+    if (sol.opt && (Math.abs(g.c[0]) > 1e-12 || Math.abs(g.c[1]) > 1e-12)) {
+      const zopt = sol.opt.z, worst = sol.zs.length ? (g.sense === "max" ? Math.min(...sol.zs) : Math.max(...sol.zs)) : zopt;
+      const lv = Math.abs(zopt - worst) > 1e-9 ? [0.33, 0.66].map(f => worst + (zopt - worst) * f) : [];
+      lv.forEach(z => { const seg = clipToWindow(g.c[0], g.c[1], z, w); if (seg) layer.append(s("line", { x1: sx(seg[0][0]), y1: sy(seg[0][1]), x2: sx(seg[1][0]), y2: sy(seg[1][1]), stroke: "var(--objective)", "stroke-width": 1.2, "stroke-dasharray": "7 4", opacity: 0.55, "pointer-events": "none" })); });
+      const seg = clipToWindow(g.c[0], g.c[1], zopt, w);
+      if (seg) {
+        layer.append(s("line", { x1: sx(seg[0][0]), y1: sy(seg[0][1]), x2: sx(seg[1][0]), y2: sy(seg[1][1]), stroke: "var(--optimum)", "stroke-width": 2.6, "pointer-events": "none" }));
+        layer.append(s("text", { class: "halo", x: sx((seg[0][0] + seg[1][0]) / 2) + 6, y: sy((seg[0][1] + seg[1][1]) / 2) - 6, "font-size": 12, fill: "var(--optimum)", "pointer-events": "none" }, `Z* = ${r2(zopt)}`));
+      }
+    }
+    sol.lattice.forEach(p => layer.append(s("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 2.6, fill: "var(--feasible)", opacity: 0.7, "pointer-events": "none" })));
+    sol.vertices.forEach((v, i) => {
+      const grp = s("g", { class: "vtx" },
+        s("circle", { cx: sx(v.x), cy: sy(v.y), r: v.optimal ? 8 : 5.5, fill: v.optimal ? "var(--optimum)" : "var(--panel)", stroke: v.optimal ? "var(--panel)" : "var(--feasible)", "stroke-width": 2.5 }),
+        s("text", { class: "halo", x: sx(v.x) + (sx(v.x) > W - M.r - 80 ? -10 : 10), y: sy(v.y) + (v.optimal ? 20 : 16), "font-size": 12,
+          "text-anchor": sx(v.x) > W - M.r - 80 ? "end" : "start", "font-weight": v.optimal ? 700 : 400 }, `(${r2(v.x)}, ${r2(v.y)})`));
+      tipOn(grp, `角點 P${i + 1}(${r2(v.x)}, ${r2(v.y)})\nZ = ${r2(v.z)}${v.optimal ? "\n★ 最佳解" : ""}${interactive ? "\n(點一下把試算點移過來)" : ""}`);
+      if (interactive) grp.addEventListener("click", () => go(v.x, v.y));
+      layer.append(grp);
+    });
+    // 整數解若不在角點上,另外標出
+    if (sol.opt && !sol.vertices.some(v => v.optimal)) {
+      layer.append(s("circle", { cx: sx(sol.opt.x), cy: sy(sol.opt.y), r: 8, fill: "var(--optimum)", stroke: "var(--panel)", "stroke-width": 2.5, "pointer-events": "none" }));
+      layer.append(s("text", { class: "halo", x: sx(sol.opt.x) + 10, y: sy(sol.opt.y) + 20, "font-size": 12, "font-weight": 700, "pointer-events": "none" }, `(${r2(sol.opt.x)}, ${r2(sol.opt.y)})`));
+    }
+    layer.setAttribute("clip-path", clipId);
+    hooks.onChange && hooks.onChange({ st, sol, changed: st.hps.filter(hp => !hp.bound && Math.abs(hp.b - hp.b0) > 1e-12) });
+  };
+
+  // ---- 試算點
+  let go = () => {};
   if (interactive) {
     const guide = s("path", { stroke: "var(--objective)", "stroke-dasharray": "2 3", fill: "none", opacity: 0.7, "pointer-events": "none" });
     const pIso = s("line", { stroke: "var(--objective)", "stroke-width": 2.2, "stroke-dasharray": "8 5", "pointer-events": "none" });
     const pLab = s("text", { class: "halo", "font-size": 13, "font-weight": 700, fill: "var(--objective)", "pointer-events": "none" });
-    svg.append(guide, pIso, pLab);
+    const knobDot = s("circle", { class: "ring", r: 9, fill: "var(--objective)", stroke: "var(--panel)", "stroke-width": 2.5 });
+    const knob = s("g", { class: "probe drag", tabindex: 0, role: "slider", "aria-label": "試算點:拖曳或用方向鍵移動" }, s("circle", { r: 18, fill: "transparent" }), knobDot);
+    svg.append(guide, pIso, pLab, knob);
     const xStep = g.integer && g.integer[0] ? 1 : Math.pow(10, Math.floor(Math.log10((w.xh - w.xl) / 100)));
     const yStep = g.integer && g.integer[1] ? 1 : Math.pow(10, Math.floor(Math.log10((w.yh - w.yl) / 100)));
-    const snapTo = (v, st) => parseFloat((Math.round(v / st) * st).toFixed(10));
-    setProbe = (x, y) => {
-      x = clamp(x, w.xl, w.xh); y = clamp(y, w.yl, w.yh);
-      const p = probeEval(g, x, y);
+    const snapTo = (v, stp) => parseFloat((Math.round(v / stp) * stp).toFixed(10));
+    let cur = g.optimum ? [g.optimum.x, g.optimum.y] : g.vertices.length ? [g.vertices[0].x, g.vertices[0].y] : [(w.xl + w.xh) / 2, (w.yl + w.yh) / 2];
+    const show = () => {
+      const [x, y] = cur, p = probeEval(st, x, y);
       knob.setAttribute("transform", `translate(${sx(x)},${sy(y)})`);
       knobDot.setAttribute("fill", p.feasible ? "var(--objective)" : "var(--ink-2)");
       const x0 = sx(clamp(0, w.xl, w.xh)), y0 = sy(clamp(0, w.yl, w.yh));
       guide.setAttribute("d", `M${sx(x)},${sy(y)} V${y0} M${sx(x)},${sy(y)} H${x0}`);
       const seg = clipToWindow(g.c[0], g.c[1], p.z, w);
-      if (seg) {
-        [["x1", sx(seg[0][0])], ["y1", sy(seg[0][1])], ["x2", sx(seg[1][0])], ["y2", sy(seg[1][1])]].forEach(([k, v]) => pIso.setAttribute(k, v));
-        pIso.removeAttribute("visibility");
-      } else pIso.setAttribute("visibility", "hidden");
-      const lx = sx(x) + 14, ly = sy(y) - 14;
-      pLab.setAttribute("x", Math.min(lx, W - M.r - 90)); pLab.setAttribute("y", Math.max(ly, M.t + 14));
+      if (seg) { [["x1", sx(seg[0][0])], ["y1", sy(seg[0][1])], ["x2", sx(seg[1][0])], ["y2", sy(seg[1][1])]].forEach(([k, v]) => pIso.setAttribute(k, v)); pIso.removeAttribute("visibility"); }
+      else pIso.setAttribute("visibility", "hidden");
+      pLab.setAttribute("x", Math.min(sx(x) + 14, W - M.r - 90)); pLab.setAttribute("y", Math.max(sy(y) - 14, M.t + 14));
       pLab.textContent = `Z = ${r2(p.z)}`;
       knob.setAttribute("aria-valuetext", `${g.names[0]} = ${r2(x)}, ${g.names[1]} = ${r2(y)}, Z = ${r2(p.z)}${p.feasible ? ",可行" : ",不可行"}`);
-      onProbe(p);
+      hooks.onProbe && hooks.onProbe(p, sol);
     };
+    go = (x, y) => { cur = [clamp(x, w.xl, w.xh), clamp(y, w.yl, w.yh)]; show(); };
     const fromPixel = (px, py) => {
-      for (const v of g.vertices) if (Math.hypot(sx(v.x) - px, sy(v.y) - py) < 11) return [v.x, v.y];
+      for (const v of sol.vertices) if (Math.hypot(sx(v.x) - px, sy(v.y) - py) < 11) return [v.x, v.y];
       return [snapTo(ix(px), xStep), snapTo(iy(py), yStep)];
     };
-    const knobDot = s("circle", { class: "ring", r: 9, fill: "var(--objective)", stroke: "var(--panel)", "stroke-width": 2.5 });
-    const knob = s("g", { class: "probe drag", tabindex: 0, role: "slider", "aria-label": "試算點:拖曳或用方向鍵移動" },
-      s("circle", { r: 18, fill: "transparent" }), knobDot);
-    let cur = g.optimum ? [g.optimum.x, g.optimum.y] : g.vertices.length ? [g.vertices[0].x, g.vertices[0].y] : [(w.xl + w.xh) / 2, (w.yl + w.yh) / 2];
-    const home = [...cur];
-    const go = (x, y) => { cur = [x, y]; setProbe(x, y); };
-    // 在圖上任一處按下並拖曳都能移動試算點(角點除外,點角點會直接跳過去)
-    dragOn(svg, svg, (pt, phase) => { if (pt) go(...fromPixel(pt.x, pt.y)); if (phase === "end") knob.focus({ preventScroll: true }); },
-      e => !e.target.closest(".vtx"));
+    // 拖曳:按在限制式邊界線上 → 平移該限制式;按在其他地方 → 移動試算點
+    let mode = null;
+    dragOn(svg, svg, (pt, phase) => {
+      if (phase === "end") {
+        if (mode && mode.i != null) { mode = null; paint(); show(); }
+        else knob.focus({ preventScroll: true });
+        mode = null; return;
+      }
+      if (mode.i != null) {
+        if (phase === "start") return;
+        const hp = st.hps[mode.i];
+        const d = (hp.a[0] * ix(pt.x) + hp.a[1] * iy(pt.y)) - (hp.a[0] * ix(mode.p0.x) + hp.a[1] * iy(mode.p0.y));
+        const scale = Math.max(Math.abs(hp.b0), Math.abs(hp.a[0]) * (w.xh - w.xl), Math.abs(hp.a[1]) * (w.yh - w.yl), 1e-9);
+        const stp = Math.pow(10, Math.floor(Math.log10(scale)) - 1);
+        hp.b = parseFloat((Math.round((mode.b0 + d) / stp) * stp).toFixed(10));
+        paint(mode.i); show();
+      } else go(...fromPixel(pt.x, pt.y));
+    }, e => {
+      if (e.target.closest(".vtx")) return false;
+      const cl = e.target.closest(".cline.movable");
+      mode = cl ? { i: Number(cl.dataset.i), p0: svgPoint(svg, e), b0: st.hps[Number(cl.dataset.i)].b } : { i: null };
+      return true;
+    });
     knob.addEventListener("keydown", e => {
       const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
       if (!k) return;
@@ -305,68 +418,63 @@ function drawGraph(g, onProbe) {
       const m = e.shiftKey ? 10 : 1;
       go(snapTo(cur[0] + k[0] * xStep * m, xStep), snapTo(cur[1] + k[1] * yStep * m, yStep));
     });
-    svg.resetProbe = () => go(...home);
-    svg.goProbe = go;
-    // 角點:放在最上層,可點擊跳轉
-    g.vertices.forEach((v, i) => {
-      const grp = s("g", { class: "vtx" },
-        s("circle", { cx: sx(v.x), cy: sy(v.y), r: v.optimal ? 8 : 5.5, fill: v.optimal ? "var(--optimum)" : "var(--panel)",
-          stroke: v.optimal ? "var(--panel)" : "var(--feasible)", "stroke-width": 2.5 }),
-        s("text", { class: "halo", x: sx(v.x) + 10, y: sy(v.y) + (v.optimal ? 20 : 16), "font-size": 12,
-          "font-weight": v.optimal ? 700 : 400 }, `(${r2(v.x)}, ${r2(v.y)})`));
-      tipOn(grp, `角點 P${i + 1}(${r2(v.x)}, ${r2(v.y)})\nZ = ${fmt(v.z)}${v.optimal ? "\n★ 最佳解" : ""}\n(點一下把試算點移過來)`);
-      grp.addEventListener("click", () => go(v.x, v.y));
-      svg.append(grp);
-    });
-    svg.append(knob);
-    setTimeout(() => setProbe(...cur));
-  } else {
-    g.vertices.forEach(v => {
-      svg.append(s("circle", { cx: sx(v.x), cy: sy(v.y), r: v.optimal ? 8 : 5, fill: v.optimal ? "var(--optimum)" : "var(--panel)",
-        stroke: v.optimal ? "var(--panel)" : "var(--feasible)", "stroke-width": 2.5 }));
-      svg.append(s("text", { class: "halo", x: sx(v.x) + 10, y: sy(v.y) + (v.optimal ? 20 : 16), "font-size": 12,
-        "font-weight": v.optimal ? 700 : 400 }, `(${r2(v.x)}, ${r2(v.y)})`));
-    });
-  }
+    svg.api = {
+      resetProbe: () => (sol.opt ? go(sol.opt.x, sol.opt.y) : go(...cur)),
+      resetLines: () => { st.hps.forEach(hp => { hp.b = hp.b0; }); paint(); show(); },
+      hasLines: nCons > 0,
+    };
+    paint(); setTimeout(show);
+  } else paint();
   return svg;
 }
 
-function graphCard(g) {
+function graphCard(g, opts = {}) {
   const out = h("div", { class: "probe-out", "aria-live": "polite" });
-  const svg = drawGraph(g, p => {
-    let rel = null;
-    if (p.feasible && g.optimum) {
-      const d = g.optimum.z - p.z;
-      rel = Math.abs(d) < 1e-9 * (1 + Math.abs(g.optimum.z)) ? "= 最佳值 Z*"
-        : `與最佳值 Z* 相差 ${r2(Math.abs(d))}`;
-    }
-    out.replaceChildren(...[
-      h("span", {}, "試算點 ", h("b", {}, `${g.names[0]} = ${r2(p.x)},${g.names[1]} = ${r2(p.y)}`)),
-      h("span", {}, `${g.obj_name} Z = `, h("b", {}, r2(p.z))),
-      h("span", { class: "pill " + (p.feasible ? "ok" : "bad") }, p.feasible ? "可行" : p.bad.length ? "不可行" : "不是整數"),
-      p.bad.length ? h("span", { class: "hint", style: "margin:0" }, "違反:" + p.bad.join("、")) : null,
-      rel && h("span", { class: "hint", style: "margin:0" }, rel),
-      g.optimum && h("button", { class: "btn icon", type: "button", onclick: () => svg.resetProbe() }, "回到最佳解")].filter(Boolean));
+  const what = h("div", { class: "whatif", hidden: true, "aria-live": "polite" });
+  const z0 = g.optimum ? g.optimum.z : null;
+  const svg = drawGraph(g, {
+    onProbe: (p, sol) => {
+      let rel = null;
+      if (p.feasible && sol && sol.opt) {
+        const d = sol.opt.z - p.z;
+        rel = Math.abs(d) < 1e-9 * (1 + Math.abs(sol.opt.z)) ? "= 最佳值 Z*" : `與最佳值 Z* 相差 ${r2(Math.abs(d))}`;
+      }
+      out.replaceChildren(...[
+        h("span", {}, "試算點 ", h("b", {}, `${g.names[0]} = ${r2(p.x)},${g.names[1]} = ${r2(p.y)}`)),
+        h("span", {}, `${g.obj_name} Z = `, h("b", {}, r2(p.z))),
+        h("span", { class: "pill " + (p.feasible ? "ok" : "bad") }, p.feasible ? "可行" : p.bad.length ? "不可行" : "不是整數"),
+        p.bad.length ? h("span", { class: "hint", style: "margin:0" }, "違反:" + p.bad.join("、")) : null,
+        rel && h("span", { class: "hint", style: "margin:0" }, rel),
+        h("button", { class: "btn icon", type: "button", onclick: () => svg.api.resetProbe() }, "回到最佳解")].filter(Boolean));
+    },
+    onChange: ({ sol, changed }) => {
+      what.hidden = !changed.length;
+      if (!changed.length) return;
+      const res = sol.status === "optimal" && sol.opt
+        ? [h("span", {}, "新的最佳解 ", h("b", {}, `${g.names[0]} = ${r2(sol.opt.x)},${g.names[1]} = ${r2(sol.opt.y)}`)),
+          h("span", {}, `Z* = `, h("b", {}, r2(sol.opt.z)),
+            z0 != null && Math.abs(sol.opt.z - z0) > 1e-9 ? h("span", { class: "delta " + ((sol.opt.z > z0) === (g.sense === "max") ? "up" : "down") },
+              `(${sol.opt.z > z0 ? "+" : "−"}${r2(Math.abs(sol.opt.z - z0))})`) : " (不變)")]
+        : [h("span", { class: "pill bad" }, sol.status === "infeasible" ? "沒有可行解" : "無界(Z 可以無限改善)")];
+      what.replaceChildren(
+        h("div", {}, h("b", {}, "假設分析:"), changed.map((hp, k) => h("span", {}, `${k ? "、" : ""}${hp.name} 右端值 ${fmt(hp.b0)} → `, h("b", {}, fmt(hp.b))))),
+        h("div", { class: "whatif-res" }, res),
+        h("div", { class: "row", style: "margin:6px 0 0" },
+          h("button", { class: "btn icon", type: "button", onclick: () => svg.api.resetLines() }, "還原限制式"),
+          opts.onApply && h("button", { class: "btn icon", type: "button", onclick: () => opts.onApply(changed.map(hp => ({ i: hp.idx, b: hp.b }))) }, "套用到左邊的模型")));
+    },
   });
   const card = h("div", { class: "card" }, h("h2", {}, "圖形化分析(可互動)"),
-    h("p", { class: "hint" }, g.optimum
-      ? `在圖上按住拖曳(或選取後用方向鍵,Shift 加速)移動「試算點」:橘色虛線是通過它的等${g.obj_name}線,下方即時顯示 Z 與是否可行。點角點可直接跳過去;滑鼠移到邊界線上可看限制式。`
-      : "此問題沒有最佳解,圖中顯示的是可行區域(若為無界,區域向外延伸)。可拖曳試算點檢查任一點是否可行。"));
+    h("p", { class: "hint" }, svg.api
+      ? `① 按住虛線的「限制式邊界」拖曳,可以改變它的右端值(例如多一些資源),可行區域與最佳解會立即重算。② 在其他地方按住拖曳,可以移動橘色「試算點」,看看那一點的 Z 值、是否可行。點角點可直接跳過去。`
+      : "此問題沒有最佳解,圖中顯示的是可行區域(若為無界,區域向外延伸)。"));
   card.append(svg);
-  if (svg.resetProbe) card.append(out);
+  if (svg.api) card.append(what, out);
   card.append(h("div", { class: "legend" },
     h("span", {}, h("i", { class: "box" }), "可行區域"),
-    h("span", {}, h("i", { style: "border-color:var(--ink-2);border-top-style:dashed" }), "限制式邊界"),
+    h("span", {}, h("i", { style: "border-color:var(--ink-2);border-top-style:dashed" }), "限制式邊界(可拖曳)"),
     h("span", {}, h("i", { style: "border-color:var(--objective);border-top-style:dashed" }), `等${g.obj_name}線`),
-    g.optimum && h("span", {}, h("i", { style: "border-color:var(--optimum)" }), "通過最佳解的等值線")));
-  if (g.vertices.length) {
-    const t = h("table", { class: "data" }, h("thead", {}, h("tr", {}, h("th", { class: "l" }, "角點"),
-      h("th", {}, g.names[0]), h("th", {}, g.names[1]), h("th", {}, "Z"), h("th", { class: "l" }, ""))),
-      h("tbody", {}, g.vertices.map((v, i) => h("tr", {}, h("td", { class: "l" }, `P${i + 1}`), h("td", {}, fmt(v.x)),
-        h("td", {}, fmt(v.y)), h("td", {}, fmt(v.z)), h("td", { class: "l" }, v.optimal ? h("span", { class: "pill good" }, "最佳") : "")))));
-    card.append(h("details", { class: "more inline-more" }, h("summary", {}, `可行區域的角點(共 ${g.vertices.length} 個,最佳解一定出現在角點)`),
-      h("div", { class: "scroll-x" }, t)));
-  }
+    h("span", {}, h("i", { style: "border-color:var(--optimum)" }), "通過最佳解的等值線")));
   return card;
 }
 
@@ -410,31 +518,69 @@ function decisionCard(res, compact) {
   return card;
 }
 
-function constraintBar(r) {
-  const neg = r.lhs < -1e-9 || r.rhs < -1e-9, eq = r.op === "=";
-  const mx = Math.max(Math.abs(r.lhs), Math.abs(r.rhs)) || 1;
-  const word = r.op === "≤" ? "上限" : r.op === "≥" ? "下限" : "右端值";
-  let sub;
-  if (r.shadow != null && Math.abs(r.shadow) > 1e-9) sub = `${eq ? "" : "瓶頸 · "}${word}每增加 1,Z ${r.shadow > 0 ? "增加" : "減少"} ${fmt(Math.abs(r.shadow))}`;
-  else if (r.binding) sub = eq ? "等式成立" : "瓶頸(等號成立)";
-  else sub = r.op === "≤" ? `尚有剩餘 ${fmt(r.slack)}` : `超出下限 ${fmt(r.slack)}`;
-  if (r.op === "≤" && r.rhs > 1e-9 && !neg) sub += ` · 使用率 ${Math.round((r.lhs / r.rhs) * 100)}%`;
-  return barRow({ name: r.name, frac: neg ? 0 : Math.abs(r.lhs) / mx, mark: neg ? null : Math.abs(r.rhs) / mx,
-    cls: r.binding && !eq ? "hot" : "", val: `${fmt(r.lhs)} ${r.op} ${fmt(r.rhs)}`, sub, tip: r.text });
+// 一條限制式 → 容量條 + 一句白話結論
+// r: { name, op("≤"|"≥"|"="), lhs, rhs, binding, slack, shadow, text }
+function capacityItem(r, objName = "目標值") {
+  const pct = v => (clamp(v, 0, 1) * 100).toFixed(2) + "%";
+  const neg = r.lhs < -1e-9 || r.rhs < -1e-9;
+  const sp = r.shadow != null && Math.abs(r.shadow) > 1e-9 ? r.shadow : null;
+  const spText = (lead) => sp == null ? "" : `${lead}${objName}${sp > 0 ? "增加" : "減少"} ${fmt(Math.abs(sp))}。`;
+  let kind, head, track = null, say, tag;
+  if (r.op === "≤") {
+    kind = "上限"; head = `已用 ${fmt(r.lhs)} / 上限 ${fmt(r.rhs)}`;
+    if (!neg && r.rhs > 1e-12) {
+      const used = r.lhs / r.rhs, left = Math.max(0, r.rhs - r.lhs);
+      head += `(${Math.round(used * 100)}%)`;
+      track = h("div", { class: "cap-track" },
+        h("div", { class: "cap-used" + (r.binding ? " hot" : ""), style: `width:${pct(used)}` }, used > 0.18 ? `已用 ${fmt(r.lhs)}` : ""),
+        left > 1e-9 && h("div", { class: "cap-left", style: `width:${pct(1 - used)}` }, 1 - used > 0.14 ? `剩 ${fmt(left)}` : ""));
+    }
+    tag = r.binding ? ["hot", "瓶頸"] : ["ok", "有剩餘"];
+    say = r.binding ? `全部用完了,是限制最佳方案的瓶頸。${spText("若再多 1 單位,")}`
+      : `還剩 ${fmt(r.slack)} 沒用到。就算再增加這項資源,${objName}也不會變好。`;
+  } else if (r.op === "≥") {
+    kind = "下限"; head = `實際 ${fmt(r.lhs)} / 至少 ${fmt(r.rhs)}`;
+    if (!neg && Math.max(r.lhs, r.rhs) > 1e-12) {
+      const mx = Math.max(r.lhs, r.rhs) * 1.08;
+      track = h("div", { class: "cap-track" },
+        h("div", { class: "cap-used" + (r.binding ? " hot" : ""), style: `width:${pct(r.lhs / mx)}` }, r.lhs / mx > 0.18 ? `實際 ${fmt(r.lhs)}` : ""),
+        h("div", { class: "cap-mark", style: `left:${pct(r.rhs / mx)}` }, h("span", {}, `下限 ${fmt(r.rhs)}`)));
+    }
+    tag = r.binding ? ["hot", "剛好達標"] : ["ok", "已超過"];
+    say = r.binding ? `剛好只達到最低要求,這條限制綁住了最佳方案。${spText("若下限再提高 1,")}`
+      : `比最低要求多出 ${fmt(r.slack)},這條限制目前沒有影響最佳方案。`;
+  } else {
+    kind = "必須等於"; head = `實際 ${fmt(r.lhs)} / 必須 = ${fmt(r.rhs)}`;
+    tag = ["", "已滿足"];
+    say = `必須剛好等於 ${fmt(r.rhs)},最佳方案已滿足。${spText("若右端值增加 1,")}`;
+  }
+  const item = h("div", { class: "cap" },
+    h("div", { class: "cap-head" }, h("b", {}, r.name), h("span", { class: "pill " + (tag[0] === "hot" ? "bind" : tag[0] === "ok" ? "good" : "non") }, tag[1]),
+      h("span", { class: "cap-val" }, head)),
+    track, h("div", { class: "cap-say" }, say));
+  if (r.text) tipOn(item, `${r.name}(${kind})\n${r.text}`);
+  return item;
 }
+const constraintBar = r => capacityItem(r);   // 目標規劃頁沿用
 
 function resourceCard(res) {
   if (!res.rows.length) return null;
+  const obj = res.model.obj_name;
   const rank = r => (r.op === "=" ? 2 : r.binding ? 0 : 1);
   const rows = res.rows.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map(o => o.r);
-  const show = rows.slice(0, 12), rest = rows.slice(12);
+  const show = rows.slice(0, 10), rest = rows.slice(10);
   const nb = res.rows.filter(r => r.binding && r.op !== "=").length;
   const card = h("div", { class: "card" }, h("h2", {}, "資源使用與瓶頸"),
-    h("p", { class: "hint" }, `長條 = 最佳解下的實際數量;黑色刻度 = 限制值。紅色是等號成立的瓶頸限制(共 ${nb} 條),放寬它才能改善目標。`),
-    h("div", { class: "bars" }, show.map(constraintBar)));
+    h("div", { class: "cap-legend" },
+      h("span", {}, h("i", { class: "sw used" }), "最佳方案用掉的量"),
+      h("span", {}, h("i", { class: "sw hot" }), "全部用完(瓶頸)"),
+      h("span", {}, h("i", { class: "sw left" }), "剩下沒用到的量"),
+      h("span", {}, h("i", { class: "sw mark" }), "最低要求(下限)")),
+    h("p", { class: "hint" }, nb ? `共有 ${nb} 條限制是瓶頸(紅色),想讓${obj}更好,就要先放寬這些限制。` : `目前沒有用完的資源。`),
+    h("div", { class: "caps" }, show.map(r => capacityItem(r, obj))));
   if (rest.length) card.append(h("details", { class: "more inline-more" }, h("summary", {}, `其他 ${rest.length} 條限制式`),
-    h("div", { class: "bars" }, rest.map(constraintBar))));
-  if (res.is_integer) card.append(h("p", { class: "hint" }, "整數規劃沒有嚴格意義的影子價格,因此只顯示用量與剩餘。"));
+    h("div", { class: "caps" }, rest.map(r => capacityItem(r, obj)))));
+  if (res.is_integer) card.append(h("p", { class: "hint" }, "整數規劃沒有嚴格意義的影子價格,所以不顯示「多 1 單位能增加多少」。"));
   return card;
 }
 
@@ -465,7 +611,7 @@ function resultCards(res, opts = {}) {
     return box;
   }
   box.append(decisionCard(res, opts.compact));
-  if (res.graph) box.append(graphCard(res.graph));
+  if (res.graph) box.append(graphCard(res.graph, { onApply: opts.onApply }));
   const rc = resourceCard(res);
   if (rc) box.append(rc);
   box.append(detailCard(res));
@@ -625,7 +771,10 @@ function showGeneralResult() {
   const box = $("#g-result");
   box.replaceChildren();
   if (G.error) box.append(h("div", { class: "banner err" }, G.error));
-  else if (G.result) box.append(resultCards(G.result));
+  else if (G.result) box.append(resultCards(G.result, { onApply: changes => {
+    changes.forEach(({ i, b }) => { if (G.cons[i]) G.cons[i].b = b; });
+    renderGeneral(); $("#g-solve").click();
+  } }));
   else box.append(h("div", { class: "empty" }, "填好左邊的資料後,按下「求解」,結果、敏感度分析與圖形會顯示在這裡。"));
 }
 

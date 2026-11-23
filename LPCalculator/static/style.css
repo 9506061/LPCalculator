@@ -181,3 +181,34 @@ svg .probe:focus-visible circle.ring { stroke: var(--ink); stroke-width: 2; }
 
 .card.problem { border-left: 3px solid var(--feasible); }
 .card.problem p { margin: 6px 0 0; line-height: 1.75; }
+
+/* ---- 拖曳限制式、假設分析 ---- */
+svg .cline.movable .hit { cursor: ns-resize; cursor: move; }
+svg .cline.movable:hover .vis, svg .cline.active .vis { stroke: var(--ink); stroke-width: 3.4; stroke-dasharray: none; }
+.whatif { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--optimum); border-radius: var(--radius); background: var(--err-bg); color: var(--ink); font-size: 14px; }
+.whatif > div { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.whatif-res { margin-top: 4px; }
+.delta { font-weight: 700; margin-left: 4px; }
+.delta.up { color: var(--ok-ink); }
+.delta.down { color: var(--err-ink); }
+
+/* ---- 容量條 ---- */
+.caps { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
+.cap-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 5px; }
+.cap-head .cap-val { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 13.5px; }
+.cap-track { position: relative; display: flex; height: 24px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
+.cap-used, .cap-left { height: 100%; display: flex; align-items: center; font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; padding: 0 8px; }
+.cap-used { background: var(--feasible); color: var(--on-accent); border-radius: 4px 0 0 4px; min-width: 3px; }
+.cap-used.hot { background: var(--optimum); }
+.cap-left { color: var(--ink-2); border-radius: 0 4px 4px 0;
+  background: repeating-linear-gradient(135deg, var(--line-soft) 0 6px, transparent 6px 12px); }
+.cap-mark { position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; background: var(--ink); border-radius: 2px; }
+.cap-mark span { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 11.5px; color: var(--ink); white-space: nowrap; }
+.cap-say { margin-top: 5px; font-size: 13.5px; color: var(--ink-2); }
+.cap:has(.cap-mark) .cap-head { margin-bottom: 20px; }
+.cap-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; }
+.cap-legend .sw { display: inline-block; width: 18px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; border: 1px solid var(--line); }
+.cap-legend .sw.used { background: var(--feasible); border-color: var(--feasible); }
+.cap-legend .sw.hot { background: var(--optimum); border-color: var(--optimum); }
+.cap-legend .sw.left { background: repeating-linear-gradient(135deg, var(--line-soft) 0 3px, transparent 3px 6px); }
+.cap-legend .sw.mark { width: 3px; background: var(--ink); border: 0; }

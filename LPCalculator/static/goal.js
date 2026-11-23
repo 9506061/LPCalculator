@@ -212,7 +212,7 @@ function gpShowResult() {
 
   // 3. 系統限制
   if (r.hard.length) box.append(h("div", { class: "card" }, h("h2", {}, "系統限制使用情形"),
-    h("div", { class: "bars" }, r.hard.map(c => constraintBar({ name: c.name, lhs: c.lhs, rhs: c.rhs, op: c.op, binding: c.binding,
+    h("div", { class: "caps" }, r.hard.map(c => constraintBar({ name: c.name, lhs: c.lhs, rhs: c.rhs, op: c.op, binding: c.binding,
       slack: Math.abs(c.rhs - c.lhs), shadow: null, text: c.text })))));
 
   // 4. 公式與逐層過程(預設收合)
